@@ -3,12 +3,13 @@
 set -e
 
 # Config
-PLAYLIST_FILE="yt_playlists.txt"
-OUTPUT_ROOT="Youtube Downloads"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLAYLIST_FILE="$SCRIPT_DIR/yt_playlists.txt"
+OUTPUT_ROOT="$SCRIPT_DIR/../Youtube Downloads"
 PARALLEL_JOBS=10
-ARCHIVE_FILE="downloaded.txt"
-UNAVAILABLE_FILE="unavailable_videos.txt"
-DOWNLOADED_FILE="downloaded_songs.txt"
+ARCHIVE_FILE="$SCRIPT_DIR/downloaded.txt"
+UNAVAILABLE_FILE="$SCRIPT_DIR/unavailable_videos.txt"
+DOWNLOADED_FILE="$SCRIPT_DIR/downloaded_songs.txt"
 
 mkdir -p "$OUTPUT_ROOT"
 TEMP_DIR="$(mktemp -d)"

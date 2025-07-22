@@ -1,6 +1,5 @@
-# Downloaded content
-Youtube Downloads/
-Youtube Downloads/*
+# Downloaded content (stored in parent directory)
+../Youtube Downloads/
 
 # Script output files
 downloaded.txt

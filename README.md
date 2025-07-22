@@ -63,10 +63,12 @@ Edit these variables in the script to customize behavior:
 
 ## Output Files
 
-- **Downloaded Music**: Saved in `Youtube Downloads/<Playlist Name>/`
+- **Downloaded Music**: Saved in `../Youtube Downloads/<Playlist Name>/` (parent directory)
 - **Archive**: `downloaded.txt` - Prevents re-downloading
 - **Unavailable Videos**: `unavailable_videos.txt` - Lists videos that couldn't be downloaded
 - **Download Log**: `downloaded_songs.txt` - Songs downloaded in current session
+
+All script files are kept in the `youtube-downloader-script/` directory, while downloaded music is stored in a separate `Youtube Downloads/` folder in the parent directory.
 
 ## Output Format
 
