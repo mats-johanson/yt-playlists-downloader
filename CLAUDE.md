@@ -47,8 +47,8 @@ tail -f unavailable_videos.txt
 ### Key Design Decisions
 1. **Temporary Downloads**: Uses system temp directory during download to prevent partial files
 2. **Archive System**: `downloaded.txt` tracks all downloaded video IDs
-3. **Error Tracking**: `unavailable_videos.txt` logs failed downloads with metadata
-4. **Progress Tracking**: `downloaded_songs.txt` shows current session downloads
+3. **Error Tracking**: `unavailable_videos.txt` logs failed downloads for current session only (cleared on each run)
+4. **Progress Tracking**: Uses temporary file to count current session downloads
 
 ### Configuration Variables
 - `PLAYLIST_FILE`: Input file with playlist URLs (default: `yt_playlists.txt`)
@@ -78,4 +78,4 @@ yt-dlp --extract-audio --audio-format mp3 --audio-quality 0 ...
 ### Testing Changes
 1. Create a test playlist file with 1-2 small playlists
 2. Run with modified `PARALLEL_JOBS=1` for easier debugging
-3. Check all three output files: `downloaded.txt`, `unavailable_videos.txt`, `downloaded_songs.txt`
+3. Check output files: `downloaded.txt` (archive) and `unavailable_videos.txt` (errors)

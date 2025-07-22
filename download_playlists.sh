@@ -9,13 +9,13 @@ OUTPUT_ROOT="$SCRIPT_DIR/../Youtube Downloads"
 PARALLEL_JOBS=10
 ARCHIVE_FILE="$SCRIPT_DIR/downloaded.txt"
 UNAVAILABLE_FILE="$SCRIPT_DIR/unavailable_videos.txt"
-DOWNLOADED_FILE="$SCRIPT_DIR/downloaded_songs.txt"
+TEMP_DOWNLOADED_FILE=$(mktemp "${TMPDIR:-/tmp}/downloaded_songs.XXXXXX")
 
 mkdir -p "$OUTPUT_ROOT"
 TEMP_DIR="$(mktemp -d)"
 
-# Clear the downloaded songs file for this run
-> "$DOWNLOADED_FILE"
+# Clear unavailable videos file for this run
+true > "$UNAVAILABLE_FILE"
 
 download_playlist() {
     local playlist_url="$1"
@@ -70,7 +70,7 @@ download_playlist() {
 
     # Save downloaded songs info
     if [ -f "$info_log" ] && [ -s "$info_log" ]; then
-        cat "$info_log" >> "$DOWNLOADED_FILE"
+        cat "$info_log" >> "$TEMP_DOWNLOADED_FILE"
     fi
 
     # Move files to final destination
@@ -92,7 +92,7 @@ export TEMP_DIR
 export OUTPUT_ROOT
 export ARCHIVE_FILE
 export UNAVAILABLE_FILE
-export DOWNLOADED_FILE
+export TEMP_DOWNLOADED_FILE
 
 echo "🎵 Starting YouTube playlist downloads..."
 echo "========================================"
@@ -114,8 +114,8 @@ echo "🎉 All downloads complete!"
 echo ""
 
 # Display summary of downloaded songs
-if [ -f "$DOWNLOADED_FILE" ] && [ -s "$DOWNLOADED_FILE" ]; then
-    local download_count=$(wc -l < "$DOWNLOADED_FILE")
+if [ -f "$TEMP_DOWNLOADED_FILE" ] && [ -s "$TEMP_DOWNLOADED_FILE" ]; then
+    download_count=$(wc -l < "$TEMP_DOWNLOADED_FILE")
     echo "📊 Downloaded $download_count new songs"
     echo ""
 fi
@@ -137,3 +137,6 @@ fi
 
 echo ""
 echo "📁 Files saved in: '$OUTPUT_ROOT'"
+
+# Clean up temporary files
+rm -f "$TEMP_DOWNLOADED_FILE"

@@ -57,7 +57,7 @@ https://www.youtube.com/playlist?list=PLyyyyyyyyyyyy
 Edit these variables in the script to customize behavior:
 
 - `PLAYLIST_FILE`: Input file with playlist URLs (default: `yt_playlists.txt`)
-- `OUTPUT_ROOT`: Output directory (default: `Youtube Downloads`)
+- `OUTPUT_ROOT`: Output directory (default: `../Youtube Downloads`)
 - `PARALLEL_JOBS`: Number of parallel downloads (default: 10)
 - `ARCHIVE_FILE`: Track downloaded files (default: `downloaded.txt`)
 
@@ -65,10 +65,9 @@ Edit these variables in the script to customize behavior:
 
 - **Downloaded Music**: Saved in `../Youtube Downloads/<Playlist Name>/` (parent directory)
 - **Archive**: `downloaded.txt` - Prevents re-downloading
-- **Unavailable Videos**: `unavailable_videos.txt` - Lists videos that couldn't be downloaded
-- **Download Log**: `downloaded_songs.txt` - Songs downloaded in current session
+- **Unavailable Videos**: `unavailable_videos.txt` - Lists videos that couldn't be downloaded in the current session (cleared on each run)
 
-All script files are kept in the `youtube-downloader-script/` directory, while downloaded music is stored in a separate `Youtube Downloads/` folder in the parent directory.
+All script files are kept in the script directory, while downloaded music is stored in a separate `Youtube Downloads/` folder in the parent directory.
 
 ## Output Format
 
@@ -93,7 +92,7 @@ The script provides clean, minimal output:
      Playlist: My Favorite Playlist
      URL: https://www.youtube.com/watch?v=xxxxx
 
-📁 Files saved in: 'Youtube Downloads'
+📁 Files saved in: '../Youtube Downloads'
 ```
 
 ## Troubleshooting

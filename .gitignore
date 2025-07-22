@@ -4,7 +4,6 @@
 # Script output files
 downloaded.txt
 unavailable_videos.txt
-downloaded_songs.txt
 
 # User playlist file (contains personal URLs)
 yt_playlists.txt
