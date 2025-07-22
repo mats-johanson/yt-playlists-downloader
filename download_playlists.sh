@@ -100,7 +100,8 @@ echo "========================================"
 echo ""
 
 # Run downloads in parallel
-grep -v '^\s*$' "$PLAYLIST_FILE" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'download_playlist "$@"' _ {}
+# Filter out empty lines and comment lines, extract URLs only
+grep -v '^\s*$' "$PLAYLIST_FILE" | grep -v '^#' | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'download_playlist "$@"' _ {}
 
 # Clean up NA prefixes
 find "$OUTPUT_ROOT" -type f -name "NA - *.mp3" 2>/dev/null | while IFS= read -r file; do
