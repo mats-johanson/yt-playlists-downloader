@@ -1,12 +1,11 @@
 # Downloaded content (stored in parent directory)
 ../Youtube Downloads/
 
-# Script output files
-downloaded.txt
-unavailable_videos.txt
+# Logs directory (contains output files)
+logs/
 
-# User playlist file (contains personal URLs)
-yt_playlists.txt
+# User configuration
+config/playlists.txt
 
 # IDE files
 .idea/

@@ -40,21 +40,34 @@ tail -f unavailable_videos.txt
    - Maintains download archive to prevent re-downloads
 
 ### Directory Structure
-- Script lives in `yt-playlists-downloader/`
-- Downloads are stored in `../Youtube Downloads/` (parent directory)
-- Each playlist gets its own folder named after the playlist title
+```
+yt-playlists-downloader/
+├── config/
+│   ├── playlists.txt        # User's playlist URLs
+│   └── playlists.example.txt # Example playlist file
+├── logs/
+│   ├── download-archive.txt  # History of all downloads
+│   └── unavailable-videos.txt # Failed downloads from current run
+├── download_playlists.sh     # Main script
+├── README.md
+└── CLAUDE.md
+
+../Youtube Downloads/         # Music files (parent directory)
+└── [Playlist Name]/
+    └── Artist - Song Title.mp3
+```
 
 ### Key Design Decisions
 1. **Temporary Downloads**: Uses system temp directory during download to prevent partial files
-2. **Archive System**: `downloaded.txt` tracks all downloaded video IDs
-3. **Error Tracking**: `unavailable_videos.txt` logs failed downloads for current session only (cleared on each run)
+2. **Archive System**: `logs/download-archive.txt` tracks all downloaded video IDs
+3. **Error Tracking**: `logs/unavailable-videos.txt` logs failed downloads for current session only (cleared on each run)
 4. **Progress Tracking**: Uses temporary file to count current session downloads
 
 ### Configuration Variables
-- `PLAYLIST_FILE`: Input file with playlist URLs (default: `yt_playlists.txt`)
+- `PLAYLIST_FILE`: Input file with playlist URLs (default: `config/playlists.txt`)
 - `OUTPUT_ROOT`: Download destination (default: `../Youtube Downloads`)
 - `PARALLEL_JOBS`: Number of concurrent downloads (default: 10)
-- `ARCHIVE_FILE`: File tracking downloaded videos (default: `downloaded.txt`)
+- `ARCHIVE_FILE`: File tracking downloaded videos (default: `logs/download-archive.txt`)
 
 ### Output Format
 - Files named: `Artist - Song Title.mp3`
@@ -78,4 +91,4 @@ yt-dlp --extract-audio --audio-format mp3 --audio-quality 0 ...
 ### Testing Changes
 1. Create a test playlist file with 1-2 small playlists
 2. Run with modified `PARALLEL_JOBS=1` for easier debugging
-3. Check output files: `downloaded.txt` (archive) and `unavailable_videos.txt` (errors)
+3. Check output files in `logs/` directory

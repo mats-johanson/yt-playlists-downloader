@@ -4,14 +4,15 @@ set -e
 
 # Config
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLAYLIST_FILE="$SCRIPT_DIR/yt_playlists.txt"
+PLAYLIST_FILE="$SCRIPT_DIR/config/playlists.txt"
 OUTPUT_ROOT="$SCRIPT_DIR/../Youtube Downloads"
 PARALLEL_JOBS=10
-ARCHIVE_FILE="$SCRIPT_DIR/downloaded.txt"
-UNAVAILABLE_FILE="$SCRIPT_DIR/unavailable_videos.txt"
+ARCHIVE_FILE="$SCRIPT_DIR/logs/download-archive.txt"
+UNAVAILABLE_FILE="$SCRIPT_DIR/logs/unavailable-videos.txt"
 TEMP_DOWNLOADED_FILE=$(mktemp "${TMPDIR:-/tmp}/downloaded_songs.XXXXXX")
 
 mkdir -p "$OUTPUT_ROOT"
+mkdir -p "$SCRIPT_DIR/logs"
 TEMP_DIR="$(mktemp -d)"
 
 # Clear unavailable videos file for this run

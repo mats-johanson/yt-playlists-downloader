@@ -22,7 +22,7 @@ chmod +x download_playlists.sh
 
 ## Usage
 
-1. Create `yt_playlists.txt` with your playlist URLs (one per line):
+1. Create `config/playlists.txt` with your playlist URLs (one per line):
 ```
 https://www.youtube.com/playlist?list=PLxxxxxxxxxxxxxx
 https://www.youtube.com/playlist?list=PLyyyyyyyyyyyy
@@ -43,5 +43,5 @@ Edit these variables in the script if needed:
 
 ## Files Created
 
-- `downloaded.txt` - Tracks all downloaded videos to avoid re-downloading
-- `unavailable_videos.txt` - Lists videos that failed in the current run
+- `logs/download-archive.txt` - Tracks all downloaded videos to avoid re-downloading
+- `logs/unavailable-videos.txt` - Lists videos that failed in the current run
