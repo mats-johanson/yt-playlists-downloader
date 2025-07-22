@@ -1,0 +1,39 @@
+# Downloaded content
+Youtube Downloads/
+Youtube Downloads/*
+
+# Script output files
+downloaded.txt
+unavailable_videos.txt
+downloaded_songs.txt
+
+# User playlist file (contains personal URLs)
+yt_playlists.txt
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.log
+
+# Audio files (to avoid accidentally committing copyrighted content)
+*.mp3
+*.m4a
+*.wav
+*.flac
+*.aac
+*.ogg
+*.opus
+
+# Video files
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.mov
+
+# Archive and backup files
+*.bak
+*.backup
+*~
