@@ -22,13 +22,16 @@ chmod +x download_playlists.sh
 
 ### Development Commands
 ```bash
+# Lint the script (ALWAYS run after changes)
+shellcheck download_playlists.sh
+
 # Test with a single playlist
 echo "https://youtube.com/playlist?list=EXAMPLE" > test_playlist.txt
 ./download_playlists.sh test_playlist.txt
 
 # Check download logs
-tail -f downloaded_songs.txt
-tail -f unavailable_videos.txt
+tail -f logs/download-archive.txt
+tail -f logs/unavailable-videos.txt
 ```
 
 ## Architecture Overview
@@ -77,6 +80,18 @@ yt-playlists-downloader/
 
 ## Common Development Tasks
 
+### Code Quality Checks
+**IMPORTANT**: Always run shellcheck after making changes to bash scripts:
+```bash
+# Install shellcheck if needed
+brew install shellcheck
+
+# Run linting on the main script
+shellcheck download_playlists.sh
+
+# Fix any warnings before committing
+```
+
 ### Modifying Download Behavior
 The main yt-dlp command is in the `download_playlist()` function:
 ```bash
@@ -92,3 +107,24 @@ yt-dlp --extract-audio --audio-format mp3 --audio-quality 0 ...
 1. Create a test playlist file with 1-2 small playlists
 2. Run with modified `PARALLEL_JOBS=1` for easier debugging
 3. Check output files in `logs/` directory
+4. Run `shellcheck download_playlists.sh` to ensure code quality
+
+## Code Quality Requirements
+
+### Shellcheck Linting
+**IMPORTANT**: All bash scripts must pass shellcheck without warnings:
+```bash
+# Install shellcheck if not available
+which shellcheck || brew install shellcheck
+
+# Run linting
+shellcheck download_playlists.sh
+```
+
+Common shellcheck issues to watch for:
+- SC2046: Quote command substitutions to prevent word splitting
+- SC2155: Declare and assign variables separately
+- SC2188: Redirections without commands need `true` or `:` 
+- SC2086: Double quote variables to prevent globbing
+
+If shellcheck reports any issues, fix them before considering the code complete.

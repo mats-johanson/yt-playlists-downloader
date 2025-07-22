@@ -2,136 +2,136 @@
 
 set -e
 
-# Config
+# Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLAYLIST_FILE="$SCRIPT_DIR/config/playlists.txt"
+PLAYLIST_FILE="${1:-$SCRIPT_DIR/config/playlists.txt}"
 OUTPUT_ROOT="$SCRIPT_DIR/../Youtube Downloads"
 PARALLEL_JOBS=10
+
+# Ensure directories exist
+mkdir -p "$OUTPUT_ROOT" "$SCRIPT_DIR/logs"
+
+# Log files
 ARCHIVE_FILE="$SCRIPT_DIR/logs/download-archive.txt"
 UNAVAILABLE_FILE="$SCRIPT_DIR/logs/unavailable-videos.txt"
-TEMP_DOWNLOADED_FILE=$(mktemp "${TMPDIR:-/tmp}/downloaded_songs.XXXXXX")
+ARCHIVE_SNAPSHOT="$(mktemp)"
 
-mkdir -p "$OUTPUT_ROOT"
-mkdir -p "$SCRIPT_DIR/logs"
-TEMP_DIR="$(mktemp -d)"
-
-# Clear unavailable videos file for this run
+# Initialize logs
 true > "$UNAVAILABLE_FILE"
+if [ -f "$ARCHIVE_FILE" ]; then
+    cp "$ARCHIVE_FILE" "$ARCHIVE_SNAPSHOT"
+else
+    touch "$ARCHIVE_SNAPSHOT"
+fi
 
+# Download a single playlist
 download_playlist() {
-    local playlist_url="$1"
-    local temp_path
-    temp_path="$(mktemp -d -p "$TEMP_DIR")"
+    local url="$1"
+    local playlist_name="$2"
+    local temp_dir
     local error_log
-    error_log="$(mktemp -p "$TEMP_DIR")"
-    local info_log
-    info_log="$(mktemp -p "$TEMP_DIR")"
-
-    local output_template="$temp_path/%(playlist_title)s/%(artist)s - %(title).100s.%(ext)s"
-
-    # Get playlist name first
-    local playlist_name
-    playlist_name=$(yt-dlp --quiet --no-warnings --flat-playlist --print "%(playlist_title)s" "$playlist_url" 2>/dev/null | head -1 || echo "Unknown Playlist")
+    temp_dir="$(mktemp -d)"
+    error_log="$(mktemp)"
     
-    echo "📀 Processing: $playlist_name"
-
-    # Download with minimal output
-    if ! yt-dlp \
+    echo "📀 Downloading: $playlist_name"
+    yt-dlp \
         --quiet \
         --no-warnings \
-        --progress \
         --yes-playlist \
         --extract-audio \
         --audio-format mp3 \
         --audio-quality 0 \
         --download-archive "$ARCHIVE_FILE" \
-        --output "$output_template" \
+        --output "$temp_dir/%(playlist_title)s/%(artist)s - %(title).100s.%(ext)s" \
         --concurrent-fragments 5 \
-        --print-to-file "%(playlist_title)s|%(artist)s|%(title)s|%(webpage_url)s" "$info_log" \
-        --exec "echo '   ✓ Downloaded: %(artist)s - %(title)s'" \
-        "$playlist_url" 2>"$error_log"; then
-        
-        # Parse error log for unavailable videos
-        while IFS= read -r line; do
-            if [[ "$line" =~ \[youtube\]\ ([^:]+):.*Video\ unavailable ]] || \
-               [[ "$line" =~ \[youtube\]\ ([^:]+):.*Private\ video ]] || \
-               [[ "$line" =~ \[youtube\]\ ([^:]+):.*has\ been\ removed ]]; then
-                
-                local video_id="${BASH_REMATCH[1]}"
-                local video_url="https://www.youtube.com/watch?v=$video_id"
-                
-                # Try to get video info using a separate yt-dlp call
-                local video_info
-                video_info=$(yt-dlp --quiet --no-warnings --skip-download --print "%(artist)s|%(title)s" "$video_url" 2>/dev/null || echo "Unknown Artist|Unknown Title")
-                
-                echo "$playlist_name|$video_info|$video_url" >> "$UNAVAILABLE_FILE"
+        "$url" 2>"$error_log"
+    
+    local exit_code=$?
+    
+    # Handle unavailable videos
+    if [ $exit_code -ne 0 ]; then
+        grep -E "Video unavailable|Private video|has been removed" "$error_log" | while read -r line; do
+            if [[ "$line" =~ \[youtube\]\ ([^:]+): ]]; then
+                echo "$playlist_name|Unknown|Unknown|https://www.youtube.com/watch?v=${BASH_REMATCH[1]}" >> "$UNAVAILABLE_FILE"
             fi
-        done < "$error_log"
+        done
     fi
-
-    # Save downloaded songs info
-    if [ -f "$info_log" ] && [ -s "$info_log" ]; then
-        cat "$info_log" >> "$TEMP_DOWNLOADED_FILE"
+    
+    # Move downloaded files to final destination
+    if [ -d "$temp_dir" ]; then
+        find "$temp_dir" -type d -mindepth 1 -maxdepth 1 | while read -r playlist_dir; do
+            local dest
+            dest="$OUTPUT_ROOT/$(basename "$playlist_dir")"
+            mkdir -p "$dest"
+            find "$playlist_dir" -type f -name "*.mp3" -exec mv {} "$dest/" \;
+        done
     fi
-
-    # Move files to final destination
-    for playlist_folder in "$temp_path"/*; do
-        [ -d "$playlist_folder" ] || continue
-        playlist_title="$(basename "$playlist_folder")"
-        final_dest="$OUTPUT_ROOT/$playlist_title"
-        mkdir -p "$final_dest"
-        mv "$playlist_folder"/* "$final_dest/" 2>/dev/null || true
-    done
-
-    rm -rf "$temp_path" "$error_log" "$info_log"
+    
+    # Cleanup
+    rm -rf "$temp_dir" "$error_log"
     echo "✅ Completed: $playlist_name"
-    echo ""
 }
 
-export -f download_playlist
-export TEMP_DIR
-export OUTPUT_ROOT
-export ARCHIVE_FILE
-export UNAVAILABLE_FILE
-export TEMP_DOWNLOADED_FILE
-
+# Main execution
 echo "🎵 Starting YouTube playlist downloads..."
-echo "========================================"
 echo ""
 
-# Run downloads in parallel
-# Filter out empty lines and comment lines, extract URLs only
-grep -v '^\s*$' "$PLAYLIST_FILE" | grep -v '^#' | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'download_playlist "$@"' _ {}
+# Read playlists
+declare -a urls names
+while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    
+    # Get playlist name
+    name="$(yt-dlp --quiet --no-warnings --flat-playlist --print "%(playlist_title)s" "$line" 2>/dev/null | head -1 || echo "Unknown Playlist")"
+    
+    urls+=("$line")
+    names+=("$name")
+    echo "📋 Found: $name"
+done < "$PLAYLIST_FILE"
 
-# Clean up NA prefixes
-find "$OUTPUT_ROOT" -type f -name "NA - *.mp3" 2>/dev/null | while IFS= read -r file; do
-    newfile="$(dirname "$file")/$(basename "$file" | sed 's/^NA - //')"
-    mv "$file" "$newfile"
+echo ""
+echo "⏳ Downloading ${#urls[@]} playlists (max $PARALLEL_JOBS parallel)..."
+echo ""
+
+# Download playlists in parallel
+export -f download_playlist
+export OUTPUT_ROOT ARCHIVE_FILE UNAVAILABLE_FILE
+
+for i in "${!urls[@]}"; do
+    download_playlist "${urls[$i]}" "${names[$i]}" &
+    
+    # Limit parallel jobs
+    while [ "$(jobs -r | wc -l)" -ge "$PARALLEL_JOBS" ]; do
+        sleep 0.1
+    done
 done
 
-rm -rf "$TEMP_DIR"
+# Wait for all downloads
+wait
 
+# Clean up "NA - " prefixes from filenames
+find "$OUTPUT_ROOT" -type f -name "NA - *.mp3" | while read -r file; do
+    mv "$file" "${file/NA - /}" 2>/dev/null || true
+done
+
+# Summary
+echo ""
 echo "========================================"
 echo "🎉 All downloads complete!"
 echo ""
 
-# Display summary of downloaded songs
-if [ -f "$TEMP_DOWNLOADED_FILE" ] && [ -s "$TEMP_DOWNLOADED_FILE" ]; then
-    download_count=$(wc -l < "$TEMP_DOWNLOADED_FILE")
-    echo "📊 Downloaded $download_count new songs"
-    echo ""
+# Count new downloads
+if [ -f "$ARCHIVE_FILE" ] && [ -f "$ARCHIVE_SNAPSHOT" ]; then
+    new_count="$(comm -13 <(sort "$ARCHIVE_SNAPSHOT") <(sort "$ARCHIVE_FILE") | wc -l)"
+    [ "$new_count" -gt 0 ] && echo "📊 Downloaded $new_count new songs"
 fi
 
-# Display unavailable videos if any were found
-if [ -f "$UNAVAILABLE_FILE" ] && [ -s "$UNAVAILABLE_FILE" ]; then
+# Show unavailable videos
+if [ -s "$UNAVAILABLE_FILE" ]; then
+    echo ""
     echo "⚠️  Some videos were unavailable:"
     echo "================================="
-    while IFS='|' read -r playlist artist title url; do
-        echo "  ❌ $artist - $title"
-        echo "     Playlist: $playlist"
-        echo "     URL: $url"
-        echo ""
-    done < "$UNAVAILABLE_FILE"
+    awk -F'|' '{printf "  ❌ %s - %s\n     Playlist: %s\n     URL: %s\n\n", $2, $3, $1, $4}' "$UNAVAILABLE_FILE"
     echo "Full list saved to: $UNAVAILABLE_FILE"
 else
     echo "✨ All videos were successfully processed!"
@@ -140,5 +140,5 @@ fi
 echo ""
 echo "📁 Files saved in: '$OUTPUT_ROOT'"
 
-# Clean up temporary files
-rm -f "$TEMP_DOWNLOADED_FILE"
+# Cleanup
+rm -f "$ARCHIVE_SNAPSHOT"
