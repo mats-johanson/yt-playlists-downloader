@@ -9,6 +9,10 @@ downloaded_songs.txt
 # User playlist file (contains personal URLs)
 yt_playlists.txt
 
+# IDE files
+.idea/
+*.iml
+
 # macOS
 .DS_Store
 

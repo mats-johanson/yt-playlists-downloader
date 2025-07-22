@@ -1,4 +1,4 @@
-# YouTube Playlist Downloader
+# YouTube Playlists Downloader
 
 A parallel YouTube playlist downloader that efficiently downloads multiple playlists as MP3 files with proper metadata and error tracking.
 
