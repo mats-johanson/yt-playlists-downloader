@@ -27,11 +27,14 @@ fi
 # Download a single playlist
 download_playlist() {
     local url="$1"
-    local playlist_name="$2"
     local temp_dir
     local error_log
+    local playlist_name
     temp_dir="$(mktemp -d)"
     error_log="$(mktemp)"
+    
+    # Get playlist name (this happens in parallel now)
+    playlist_name="$(yt-dlp --quiet --no-warnings --flat-playlist --print "%(playlist_title)s" "$url" 2>/dev/null | head -1 || echo "Unknown Playlist")"
     
     echo "📀 Downloading: $playlist_name"
     yt-dlp \
@@ -77,28 +80,23 @@ echo "🎵 Starting YouTube playlist downloads..."
 echo ""
 
 # Read playlists
-declare -a urls names
+declare -a urls
 while IFS= read -r line; do
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    
-    # Get playlist name
-    name="$(yt-dlp --quiet --no-warnings --flat-playlist --print "%(playlist_title)s" "$line" 2>/dev/null | head -1 || echo "Unknown Playlist")"
-    
     urls+=("$line")
-    names+=("$name")
-    echo "📋 Found: $name"
 done < "$PLAYLIST_FILE"
 
+echo "📋 Found ${#urls[@]} playlists to download"
 echo ""
-echo "⏳ Downloading ${#urls[@]} playlists (max $PARALLEL_JOBS parallel)..."
+echo "⏳ Starting downloads (max $PARALLEL_JOBS parallel)..."
 echo ""
 
 # Download playlists in parallel
 export -f download_playlist
 export OUTPUT_ROOT ARCHIVE_FILE UNAVAILABLE_FILE
 
-for i in "${!urls[@]}"; do
-    download_playlist "${urls[$i]}" "${names[$i]}" &
+for url in "${urls[@]}"; do
+    download_playlist "$url" &
     
     # Limit parallel jobs
     while [ "$(jobs -r | wc -l)" -ge "$PARALLEL_JOBS" ]; do
