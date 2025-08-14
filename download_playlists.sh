@@ -4,25 +4,44 @@ set -e
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLAYLIST_FILE="${1:-$SCRIPT_DIR/config/playlists.txt}"
 OUTPUT_ROOT="$SCRIPT_DIR/../Youtube Downloads"
 PARALLEL_JOBS=10
 
+# Handle command-line arguments
+if [ "$1" = "--clean-orphans" ]; then
+    echo "🧹 Cleaning orphaned archive entries..."
+    echo ""
+    total_cleaned=0
+    for archive in "$SCRIPT_DIR"/logs/archives/*.txt; do
+        if [ -f "$archive" ]; then
+            playlist_name="$(basename "$archive" .txt)"
+            playlist_dir="$OUTPUT_ROOT/$playlist_name"
+            if [ ! -d "$playlist_dir" ] || [ -z "$(find "$playlist_dir" -name "*.mp3" -print -quit 2>/dev/null)" ]; then
+                count=$(wc -l < "$archive" 2>/dev/null || echo 0)
+                if [ "$count" -gt 0 ]; then
+                    echo "  Clearing $count entries from $playlist_name archive (folder missing/empty)"
+                    true > "$archive"
+                    total_cleaned=$((total_cleaned + count))
+                fi
+            fi
+        fi
+    done
+    echo ""
+    echo "✅ Cleaned $total_cleaned orphaned archive entries"
+    exit 0
+fi
+
+PLAYLIST_FILE="${1:-$SCRIPT_DIR/config/playlists.txt}"
+
 # Ensure directories exist
-mkdir -p "$OUTPUT_ROOT" "$SCRIPT_DIR/logs"
+mkdir -p "$OUTPUT_ROOT" "$SCRIPT_DIR/logs" "$SCRIPT_DIR/logs/archives"
 
 # Log files
-ARCHIVE_FILE="$SCRIPT_DIR/logs/download-archive.txt"
 UNAVAILABLE_FILE="$SCRIPT_DIR/logs/unavailable-videos.txt"
-ARCHIVE_SNAPSHOT="$(mktemp)"
+STATUS_DIR="$(mktemp -d)"
 
 # Initialize logs
 true > "$UNAVAILABLE_FILE"
-if [ -f "$ARCHIVE_FILE" ]; then
-    cp "$ARCHIVE_FILE" "$ARCHIVE_SNAPSHOT"
-else
-    touch "$ARCHIVE_SNAPSHOT"
-fi
 
 # Download a single playlist
 download_playlist() {
@@ -30,13 +49,25 @@ download_playlist() {
     local temp_dir
     local error_log
     local playlist_name
+    local playlist_archive
     temp_dir="$(mktemp -d)"
     error_log="$(mktemp)"
     
     # Get playlist name (this happens in parallel now)
     playlist_name="$(yt-dlp --quiet --no-warnings --flat-playlist --print "%(playlist_title)s" "$url" 2>/dev/null | head -1 || echo "Unknown Playlist")"
     
+    # Sanitize playlist name for filesystem
+    safe_name="${playlist_name//\//_}"
+    safe_name="${safe_name//\\/_}"
+    
+    # Use per-playlist archive (allows songs in multiple playlists)
+    playlist_archive="$SCRIPT_DIR/logs/archives/${safe_name}.txt"
+    
     echo "📀 Downloading: $playlist_name"
+    
+    # Create status file for this playlist
+    echo "downloading" > "$STATUS_DIR/${safe_name}.status"
+    
     yt-dlp \
         --quiet \
         --no-warnings \
@@ -44,21 +75,17 @@ download_playlist() {
         --extract-audio \
         --audio-format mp3 \
         --audio-quality 0 \
-        --download-archive "$ARCHIVE_FILE" \
+        --download-archive "$playlist_archive" \
         --output "$temp_dir/%(playlist_title)s/%(artist)s - %(title).100s.%(ext)s" \
         --concurrent-fragments 5 \
-        "$url" 2>"$error_log"
-    
-    local exit_code=$?
+        "$url" 2>"$error_log" || true  # Don't fail on yt-dlp errors
     
     # Handle unavailable videos
-    if [ $exit_code -ne 0 ]; then
-        grep -E "Video unavailable|Private video|has been removed" "$error_log" | while read -r line; do
-            if [[ "$line" =~ \[youtube\]\ ([^:]+): ]]; then
-                echo "$playlist_name|Unknown|Unknown|https://www.youtube.com/watch?v=${BASH_REMATCH[1]}" >> "$UNAVAILABLE_FILE"
-            fi
-        done
-    fi
+    grep -E "Video unavailable|Private video|has been removed" "$error_log" 2>/dev/null | while read -r line; do
+        if [[ "$line" =~ \[youtube\]\ ([^:]+): ]]; then
+            echo "$playlist_name|Unknown|Unknown|https://www.youtube.com/watch?v=${BASH_REMATCH[1]}" >> "$UNAVAILABLE_FILE"
+        fi
+    done
     
     # Move downloaded files to final destination
     if [ -d "$temp_dir" ]; then
@@ -72,7 +99,9 @@ download_playlist() {
     
     # Cleanup
     rm -rf "$temp_dir" "$error_log"
-    echo "✅ Completed: $playlist_name"
+    
+    # Mark as completed in status file (silently)
+    echo "completed" > "$STATUS_DIR/${safe_name}.status"
 }
 
 # Main execution
@@ -93,19 +122,59 @@ echo ""
 
 # Download playlists in parallel
 export -f download_playlist
-export OUTPUT_ROOT ARCHIVE_FILE UNAVAILABLE_FILE
+export OUTPUT_ROOT UNAVAILABLE_FILE SCRIPT_DIR STATUS_DIR
 
+job_count=0
 for url in "${urls[@]}"; do
-    download_playlist "$url" &
-    
-    # Limit parallel jobs
+    # Wait if we've reached the parallel job limit
     while [ "$(jobs -r | wc -l)" -ge "$PARALLEL_JOBS" ]; do
-        sleep 0.1
+        sleep 0.5
     done
+    
+    # Start the download in background
+    download_playlist "$url" &
+    ((job_count++))
 done
 
-# Wait for all downloads
+echo ""
+echo "⏳ All playlists queued ($job_count total), waiting for completion..."
+echo ""
+
+# Wait for all downloads to complete
 wait
+
+# Display completion status for all playlists
+echo ""
+echo "📊 Playlist completion status:"
+echo "================================="
+completed_count=0
+incomplete_count=0
+for status_file in "$STATUS_DIR"/*.status; do
+    if [ -f "$status_file" ]; then
+        safe_name="$(basename "$status_file" .status)"
+        status="$(cat "$status_file")"
+        
+        # Try to find the original playlist name from the archive filename
+        archive_file="$SCRIPT_DIR/logs/archives/${safe_name}.txt"
+        if [ -f "$archive_file" ]; then
+            # Use the safe name as display name (slashes were replaced with underscores)
+            display_name="${safe_name}"
+        else
+            display_name="${safe_name}"
+        fi
+        
+        if [ "$status" = "completed" ]; then
+            echo "✅ $display_name"
+            ((completed_count++))
+        else
+            echo "❌ $display_name (incomplete)"
+            ((incomplete_count++))
+        fi
+    fi
+done
+
+echo ""
+echo "Summary: $completed_count completed, $incomplete_count incomplete"
 
 # Clean up "NA - " prefixes from filenames
 find "$OUTPUT_ROOT" -type f -name "NA - *.mp3" | while read -r file; do
@@ -118,11 +187,28 @@ echo "========================================"
 echo "🎉 All downloads complete!"
 echo ""
 
-# Count new downloads
-if [ -f "$ARCHIVE_FILE" ] && [ -f "$ARCHIVE_SNAPSHOT" ]; then
-    new_count="$(comm -13 <(sort "$ARCHIVE_SNAPSHOT") <(sort "$ARCHIVE_FILE") | wc -l)"
-    [ "$new_count" -gt 0 ] && echo "📊 Downloaded $new_count new songs"
-fi
+# Count total downloads across all playlists
+total_count=0
+orphaned_count=0
+for archive in "$SCRIPT_DIR"/logs/archives/*.txt; do
+    if [ -f "$archive" ]; then
+        count=$(wc -l < "$archive")
+        total_count=$((total_count + count))
+        
+        # Check for orphaned entries (songs in archive but folder missing/empty)
+        playlist_name="$(basename "$archive" .txt)"
+        playlist_dir="$OUTPUT_ROOT/$playlist_name"
+        if [ ! -d "$playlist_dir" ] || [ -z "$(find "$playlist_dir" -name "*.mp3" -print -quit 2>/dev/null)" ]; then
+            # If playlist folder doesn't exist or has no MP3 files, count all archive entries as orphaned
+            archive_count=$(wc -l < "$archive")
+            if [ "$archive_count" -gt 0 ]; then
+                orphaned_count=$((orphaned_count + archive_count))
+            fi
+        fi
+    fi
+done
+[ "$total_count" -gt 0 ] && echo "📊 Total songs in archives: $total_count"
+[ "$orphaned_count" -gt 0 ] && echo "⚠️  Found $orphaned_count orphaned archive entries (songs previously downloaded but files missing)"
 
 # Show unavailable videos
 if [ -s "$UNAVAILABLE_FILE" ]; then
@@ -139,4 +225,6 @@ echo ""
 echo "📁 Files saved in: '$OUTPUT_ROOT'"
 
 # Cleanup
-rm -f "$ARCHIVE_SNAPSHOT"
+rm -rf "$STATUS_DIR"
+
+# No cleanup needed

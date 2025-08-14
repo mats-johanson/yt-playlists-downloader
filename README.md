@@ -1,6 +1,6 @@
 # YouTube Playlists Downloader
 
-Downloads YouTube playlists as MP3 files.
+Downloads YouTube playlists as MP3 files with smart archive tracking and parallel processing.
 
 ## Requirements
 
@@ -35,6 +35,13 @@ https://www.youtube.com/playlist?list=PLyyyyyyyyyyyy
 
 MP3 files will be saved in `../Youtube Downloads/[Playlist Name]/`
 
+### Additional Commands
+
+Clean orphaned archive entries (when files were deleted but archives remain):
+```bash
+./download_playlists.sh --clean-orphans
+```
+
 ## Configuration
 
 Edit these variables in the script if needed:
@@ -43,5 +50,15 @@ Edit these variables in the script if needed:
 
 ## Files Created
 
-- `logs/download-archive.txt` - Tracks all downloaded videos to avoid re-downloading
+- `logs/archives/[Playlist Name].txt` - Per-playlist archive tracking (allows same song in multiple playlists)
 - `logs/unavailable-videos.txt` - Lists videos that failed in the current run
+
+## Features
+
+- 🎵 Downloads YouTube playlists and converts to MP3
+- ⚡ Parallel downloads (10 concurrent by default)
+- 📝 Preserves metadata (artist, title, album)
+- 🔄 Per-playlist archive tracking (songs can exist in multiple playlists)
+- 📊 Progress tracking and error reporting
+- 🗂️ Organized folder structure per playlist
+- 🧹 Orphaned archive detection and cleaning

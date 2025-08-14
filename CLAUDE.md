@@ -30,7 +30,7 @@ echo "https://youtube.com/playlist?list=EXAMPLE" > test_playlist.txt
 ./download_playlists.sh test_playlist.txt
 
 # Check download logs
-tail -f logs/download-archive.txt
+ls -la logs/archives/  # View per-playlist archives
 tail -f logs/unavailable-videos.txt
 ```
 
@@ -49,7 +49,8 @@ yt-playlists-downloader/
 │   ├── playlists.txt        # User's playlist URLs
 │   └── playlists.example.txt # Example playlist file
 ├── logs/
-│   ├── download-archive.txt  # History of all downloads
+│   ├── archives/              # Per-playlist download histories
+│   │   └── [Playlist Name].txt
 │   └── unavailable-videos.txt # Failed downloads from current run
 ├── download_playlists.sh     # Main script
 ├── README.md
@@ -62,7 +63,7 @@ yt-playlists-downloader/
 
 ### Key Design Decisions
 1. **Temporary Downloads**: Uses system temp directory during download to prevent partial files
-2. **Archive System**: `logs/download-archive.txt` tracks all downloaded video IDs
+2. **Archive System**: Each playlist has its own archive file in `logs/archives/[Playlist Name].txt` to track downloaded videos
 3. **Error Tracking**: `logs/unavailable-videos.txt` logs failed downloads for current session only (cleared on each run)
 4. **Progress Tracking**: Uses temporary file to count current session downloads
 
@@ -70,7 +71,7 @@ yt-playlists-downloader/
 - `PLAYLIST_FILE`: Input file with playlist URLs (default: `config/playlists.txt`)
 - `OUTPUT_ROOT`: Download destination (default: `../Youtube Downloads`)
 - `PARALLEL_JOBS`: Number of concurrent downloads (default: 10)
-- `ARCHIVE_FILE`: File tracking downloaded videos (default: `logs/download-archive.txt`)
+- Archive files are automatically created per playlist in `logs/archives/`
 
 ### Output Format
 - Files named: `Artist - Song Title.mp3`
