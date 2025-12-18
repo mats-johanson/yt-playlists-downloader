@@ -42,6 +42,23 @@ Clean orphaned archive entries (when files were deleted but archives remain):
 ./download_playlists.sh --clean-orphans
 ```
 
+## Testing
+
+Use the included test script to validate changes without affecting your main downloads:
+
+```bash
+chmod +x test.sh
+./test.sh
+```
+
+This will:
+- Download a small test playlist (`Reeda löga` with 2 videos)
+- Save files to `./test_downloads/` (within the project, not your main library)
+- Clear the test folder and archive history before each run
+- Show real-time progress as videos are processed
+
+Perfect for testing new features or bug fixes!
+
 ## Configuration
 
 Edit these variables in the script if needed:

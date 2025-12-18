@@ -4,7 +4,7 @@ set -e
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_ROOT="$SCRIPT_DIR/../Youtube Downloads"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$SCRIPT_DIR/../Youtube Downloads}"
 PARALLEL_JOBS=10
 
 # Handle command-line arguments
@@ -38,39 +38,54 @@ mkdir -p "$OUTPUT_ROOT" "$SCRIPT_DIR/logs" "$SCRIPT_DIR/logs/archives"
 
 # Log files
 UNAVAILABLE_FILE="$SCRIPT_DIR/logs/unavailable-videos.txt"
+DEBUG_LOG="$SCRIPT_DIR/logs/debug.log"
 STATUS_DIR="$(mktemp -d)"
 
 # Initialize logs
 true > "$UNAVAILABLE_FILE"
+true > "$DEBUG_LOG"
 
 # Download a single playlist
 download_playlist() {
     local url="$1"
     local temp_dir
     local error_log
+    local output_log
     local playlist_name
     local playlist_archive
     temp_dir="$(mktemp -d)"
     error_log="$(mktemp)"
-    
+    output_log="$(mktemp)"
+
     # Get playlist name (this happens in parallel now)
-    playlist_name="$(yt-dlp --quiet --no-warnings --flat-playlist --print "%(playlist_title)s" "$url" 2>/dev/null | head -1 || echo "Unknown Playlist")"
-    
+    playlist_name="$(yt-dlp --flat-playlist --print "%(playlist_title)s" "$url" 2>"$output_log" | head -1 || echo "Unknown Playlist")"
+
+    # Log errors from playlist name fetch
+    if [ -s "$output_log" ]; then
+        {
+            echo "[$(date '+%H:%M:%S')] Playlist name fetch errors: $url"
+            cat "$output_log"
+        } >> "$DEBUG_LOG"
+    fi
+
     # Sanitize playlist name for filesystem
     safe_name="${playlist_name//\//_}"
     safe_name="${safe_name//\\/_}"
-    
+
     # Use per-playlist archive (allows songs in multiple playlists)
     playlist_archive="$SCRIPT_DIR/logs/archives/${safe_name}.txt"
-    
+
     echo "📀 Downloading: $playlist_name"
-    
+
     # Create status file for this playlist
     echo "downloading" > "$STATUS_DIR/${safe_name}.status"
-    
+
+    # Temporary files for capturing and processing output
+    local combined_output
+    combined_output="$(mktemp)"
+
+    # Run yt-dlp and pipe output through progress parser
     yt-dlp \
-        --quiet \
-        --no-warnings \
         --yes-playlist \
         --extract-audio \
         --audio-format mp3 \
@@ -78,8 +93,42 @@ download_playlist() {
         --download-archive "$playlist_archive" \
         --output "$temp_dir/%(playlist_title)s/%(artist)s - %(title).100s.%(ext)s" \
         --concurrent-fragments 5 \
-        "$url" 2>"$error_log" || true  # Don't fail on yt-dlp errors
-    
+        -v \
+        "$url" 2>&1 | while IFS= read -r line; do
+        # Capture all output
+        echo "$line" >> "$combined_output"
+
+        # Extract and display progress for download/extract lines
+        if [[ "$line" =~ \[ExtractAudio\]\ Destination:\ (.*/)?([^/]+\.mp3)$ ]]; then
+            filename="${BASH_REMATCH[2]}"
+            # Remove the "NA - " prefix if present
+            filename="${filename#NA - }"
+            echo "[$(date '+%H:%M:%S')] ⬇️  $playlist_name: $filename"
+        fi
+    done || true  # Don't fail on yt-dlp errors
+
+    # Separate stdout and stderr for debugging
+    grep -v "^\[ffmpeg\]" "$combined_output" >"$output_log" 2>/dev/null || true
+    grep "^\[ffmpeg\]" "$combined_output" >"$error_log" 2>/dev/null || true
+    rm -f "$combined_output"
+
+    # Log all yt-dlp output for debugging
+    if [ -s "$output_log" ]; then
+        {
+            echo "[$(date '+%H:%M:%S')] Download output for: $playlist_name"
+            cat "$output_log"
+            echo ""
+        } >> "$DEBUG_LOG"
+    fi
+
+    if [ -s "$error_log" ]; then
+        {
+            echo "[$(date '+%H:%M:%S')] Download errors for: $playlist_name"
+            cat "$error_log"
+            echo ""
+        } >> "$DEBUG_LOG"
+    fi
+
     # Handle unavailable videos
     grep -E "Video unavailable|Private video|has been removed" "$error_log" 2>/dev/null | while read -r line; do
         if [[ "$line" =~ \[youtube\]\ ([^:]+): ]]; then
@@ -98,7 +147,7 @@ download_playlist() {
     fi
     
     # Cleanup
-    rm -rf "$temp_dir" "$error_log"
+    rm -rf "$temp_dir" "$error_log" "$output_log"
     
     # Mark as completed in status file (silently)
     echo "completed" > "$STATUS_DIR/${safe_name}.status"
@@ -122,7 +171,7 @@ echo ""
 
 # Download playlists in parallel
 export -f download_playlist
-export OUTPUT_ROOT UNAVAILABLE_FILE SCRIPT_DIR STATUS_DIR
+export OUTPUT_ROOT UNAVAILABLE_FILE SCRIPT_DIR STATUS_DIR DEBUG_LOG
 
 job_count=0
 for url in "${urls[@]}"; do
@@ -223,8 +272,8 @@ fi
 
 echo ""
 echo "📁 Files saved in: '$OUTPUT_ROOT'"
+echo ""
+echo "📋 Debug log: '$DEBUG_LOG'"
 
 # Cleanup
 rm -rf "$STATUS_DIR"
-
-# No cleanup needed
