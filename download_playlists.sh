@@ -8,6 +8,17 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-$SCRIPT_DIR/../Youtube Downloads}"
 PARALLEL_JOBS=10
 DEBUG_MODE=false
 
+# ANSI formatting (disabled when output is not a terminal)
+if [ -t 1 ]; then
+    BOLD=$'\033[1m'
+    DIM=$'\033[2m'
+    GREEN=$'\033[32m'
+    RED=$'\033[31m'
+    RESET=$'\033[0m'
+else
+    BOLD="" DIM="" GREEN="" RED="" RESET=""
+fi
+
 # Handle --clean-orphans (early exit)
 if [ "$1" = "--clean-orphans" ]; then
     echo "Cleaning orphaned archive entries..."
@@ -57,11 +68,10 @@ true > "$UNAVAILABLE_FILE"
 true > "$DEBUG_LOG"
 true > "$PROGRESS_FILE"
 
-# Cleanup on exit or interrupt
-cleanup() {
-    rm -rf "$STATUS_DIR" "$SCAN_DIR" "$PROGRESS_FILE" 2>/dev/null
-}
-trap cleanup EXIT INT TERM
+# On interrupt: kill entire process group (background yt-dlp processes)
+trap 'trap - INT TERM; kill 0' INT TERM
+# On exit: clean up temp files
+trap 'rm -rf "$STATUS_DIR" "$SCAN_DIR" "$PROGRESS_FILE" 2>/dev/null' EXIT
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -91,7 +101,7 @@ scan_playlist() {
     local output
 
     # Get playlist name and video IDs in one call (replaces separate name fetch)
-    output=$(yt-dlp --flat-playlist --print $'%(playlist_title)s\t%(id)s' "$url" 2>/dev/null) || true
+    output=$(yt-dlp --flat-playlist --force-ipv4 --print $'%(playlist_title)s\t%(id)s' "$url" 2>/dev/null) || true
 
     if [ -z "$output" ]; then
         printf 'Unknown Playlist\t0\t0\t%s\n' "$url" > "$SCAN_DIR/$index.txt"
@@ -150,6 +160,7 @@ download_playlist() {
         --audio-quality 0
         --download-archive "$playlist_archive"
         --concurrent-fragments 5
+        --force-ipv4
         # yt-dlp conditional template: if artist exists, output "Artist - ", otherwise nothing
         --output "$temp_dir/%(playlist_title)s/%(artist&{} - |)s%(title).100s.%(ext)s"
     )
@@ -171,17 +182,28 @@ download_playlist() {
             current=$(wc -l < "$PROGRESS_FILE" 2>/dev/null || echo "?")
             current="${current// }"
 
-            echo "[$(date '+%H:%M:%S')]  ${current}/${TOTAL_NEW}  $playlist_name: $filename"
+            # Strip .mp3 extension and truncate long names
+            filename="${filename%.mp3}"
+            if [ "${#filename}" -gt 60 ]; then
+                filename="${filename:0:57}..."
+            fi
+            printf "  ${DIM}%${#TOTAL_NEW}s/%s${RESET}  ${BOLD}%s:${RESET} %s\n" "$current" "$TOTAL_NEW" "$playlist_name" "$filename"
         fi
     done < <(yt-dlp "${ytdlp_args[@]}" "$url" 2>"$error_log" || true)
 
     # Log errors and extract unavailable video info
+    local had_errors=false
     if [ -s "$error_log" ]; then
         {
             echo "[$(date '+%H:%M:%S')] Errors for: $playlist_name"
             cat "$error_log"
             echo ""
         } >> "$DEBUG_LOG"
+
+        # Detect rate limiting / auth errors
+        if grep -qE "Sign in to confirm|confirm you're not a bot|HTTP Error 429" "$error_log" 2>/dev/null; then
+            had_errors=true
+        fi
 
         grep -E "Video unavailable|Private video|has been removed" "$error_log" 2>/dev/null | while read -r err_line; do
             if [[ "$err_line" =~ \[youtube\]\ ([^:]+): ]]; then
@@ -203,10 +225,16 @@ download_playlist() {
 
     rm -rf "$temp_dir"
 
-    # Mark completed with song count
-    echo "completed|$song_count" > "$STATUS_DIR/${safe_name}.status"
+    # Mark status — 0 songs from a playlist we expected to have new ones is a failure
     if [ "$song_count" -gt 0 ]; then
-        echo "         ✓ $playlist_name ($song_count songs)"
+        echo "completed|$song_count" > "$STATUS_DIR/${safe_name}.status"
+        printf "%*s  ${GREEN}✓${RESET} %s ${DIM}(%s songs)${RESET}\n" $((${#TOTAL_NEW} * 2 + 14)) "" "$playlist_name" "$song_count"
+    elif [ "$had_errors" = true ]; then
+        echo "failed|0" > "$STATUS_DIR/${safe_name}.status"
+        printf "%*s  ${RED}✗ %s (blocked by YouTube)${RESET}\n" $((${#TOTAL_NEW} * 2 + 14)) "" "$playlist_name"
+    else
+        echo "failed|0" > "$STATUS_DIR/${safe_name}.status"
+        printf "%*s  ${RED}✗ %s (no songs downloaded)${RESET}\n" $((${#TOTAL_NEW} * 2 + 14)) "" "$playlist_name"
     fi
 }
 
@@ -220,7 +248,7 @@ echo ""
 
 # Step 2: Read playlist URLs
 declare -a urls
-while IFS= read -r line; do
+while IFS= read -r line || [ -n "$line" ]; do
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
     urls+=("$line")
 done < "$PLAYLIST_FILE"
@@ -237,6 +265,7 @@ for i in "${!urls[@]}"; do
         sleep 0.5
     done
     scan_playlist "${urls[$i]}" "$i" &
+    sleep 0.5
 done
 wait
 
@@ -248,45 +277,54 @@ declare -a playlist_urls
 for i in "${!urls[@]}"; do
     if [ -f "$SCAN_DIR/$i.txt" ]; then
         IFS=$'\t' read -r name total new url < "$SCAN_DIR/$i.txt"
-        playlist_names+=("$name")
-        playlist_urls+=("$url")
         TOTAL_NEW=$((TOTAL_NEW + new))
 
         if [ "$new" -gt 0 ]; then
-            printf "  %-25s %s videos, %s new\n" "$name" "$total" "$new"
+            playlist_names+=("$name")
+            playlist_urls+=("$url")
+            printf "  %-20s %3s videos, ${BOLD}%s new${RESET}\n" "$name" "$total" "$new"
         else
-            printf "  %-25s %s videos, up to date\n" "$name" "$total"
+            uptodate_count=$((${uptodate_count:-0} + 1))
         fi
     fi
 done
 
+[ "${uptodate_count:-0}" -gt 0 ] && echo "  ${DIM}($uptodate_count playlists up to date)${RESET}"
 echo ""
 if [ "$TOTAL_NEW" -eq 0 ]; then
     echo "All playlists up to date — nothing to download"
     exit 0
 fi
-echo "$TOTAL_NEW new songs to download"
+echo "${BOLD}$TOTAL_NEW${RESET} new songs to download"
 echo ""
 
 # Step 5: Download playlists in parallel (skip those with no new songs)
 export -f download_playlist
 export OUTPUT_ROOT UNAVAILABLE_FILE SCRIPT_DIR STATUS_DIR DEBUG_LOG PROGRESS_FILE TOTAL_NEW DEBUG_MODE
+export BOLD DIM GREEN RED RESET
+
+# Print all starting playlists first, then launch
+for name in "${playlist_names[@]}"; do
+    echo "  ${DIM}→ $name${RESET}"
+done
+echo ""
 
 for i in "${!playlist_names[@]}"; do
     while [ "$(jobs -r | wc -l)" -ge "$PARALLEL_JOBS" ]; do
         sleep 0.5
     done
     download_playlist "${playlist_names[$i]}" "${playlist_urls[$i]}" &
+    sleep 1
 done
 wait
 
 # Step 6: Final summary
 echo ""
-echo "========================================"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 downloaded=$(wc -l < "$PROGRESS_FILE")
 downloaded="${downloaded// }"
-echo "Done — $downloaded songs downloaded"
+echo "Done — ${BOLD}$downloaded${RESET} songs downloaded"
 echo ""
 
 # Two-column playlist status grid
@@ -298,12 +336,12 @@ for status_file in "$STATUS_DIR"/*.status; do
 
     if [ "$status" = "completed" ]; then
         if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
-            status_lines+=("$(printf "  ✓ %-18s %3s" "$safe_name" "$count")")
+            status_lines+=("$(printf "  ${GREEN}✓${RESET} %-18s %3s" "$safe_name" "$count")")
         else
-            status_lines+=("$(printf "  ✓ %-18s   -" "$safe_name")")
+            status_lines+=("$(printf "  ${GREEN}✓${RESET} %-18s ${DIM}  -${RESET}" "$safe_name")")
         fi
     else
-        status_lines+=("$(printf "  ✗ %-18s fail" "$safe_name")")
+        status_lines+=("$(printf "  ${RED}✗${RESET} %-18s ${RED}fail${RESET}" "$safe_name")")
     fi
 done
 
@@ -324,7 +362,7 @@ for archive in "$SCRIPT_DIR"/logs/archives/*.txt; do
     count="${count// }"
     total_count=$((total_count + count))
 done
-[ "$total_count" -gt 0 ] && echo "$total_count total songs in archive"
+[ "$total_count" -gt 0 ] && echo "${DIM}$total_count total songs in archive${RESET}"
 
 # Unavailable videos
 if [ -s "$UNAVAILABLE_FILE" ]; then
@@ -334,4 +372,4 @@ if [ -s "$UNAVAILABLE_FILE" ]; then
 fi
 
 echo ""
-echo "Files saved to: $OUTPUT_ROOT"
+echo "${DIM}Files saved to: $OUTPUT_ROOT${RESET}"
