@@ -38,3 +38,14 @@ config/playlists.txt
 *.bak
 *.backup
 *~
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Smoke-test output
+test_downloads/
+testlol/
