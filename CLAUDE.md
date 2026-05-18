@@ -4,128 +4,125 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a YouTube playlist downloader that converts videos to MP3 format with proper metadata preservation. The main script (`download_playlists.sh`) downloads multiple playlists in parallel, storing music files in a separate directory structure.
+YouTube playlist → MP3 downloader with a Homebrew-style live multi-bar dashboard. Parallel downloads (default 10), per-playlist archive tracking. `download_playlists.sh` is a thin launcher; all logic lives in the `yt_playlists` Python package.
 
 ## Essential Commands
 
 ### Setup and Run
 ```bash
-# Install dependencies (macOS)
-brew install yt-dlp ffmpeg
+# Install runtime requirements (macOS)
+brew install ffmpeg uv
 
-# Make script executable
-chmod +x download_playlists.sh
-
-# Run the downloader
+# Run the downloader (yt-dlp + rich are installed automatically into .venv)
 ./download_playlists.sh
 ```
 
 ### Development Commands
 ```bash
-# Lint the script (ALWAYS run after changes)
-shellcheck download_playlists.sh
+# Single-playlist smoke test
+echo "https://youtube.com/playlist?list=EXAMPLE" > /tmp/p.txt
+./download_playlists.sh /tmp/p.txt
 
-# Test with a single playlist
-echo "https://youtube.com/playlist?list=EXAMPLE" > test_playlist.txt
-./download_playlists.sh test_playlist.txt
+# Run the bundled smoke test (downloads 3 small test playlists into ./test_downloads/)
+./test.sh
 
-# Check download logs
-ls -la logs/archives/  # View per-playlist archives
-tail -f logs/unavailable-videos.txt
+# Direct invocation (bypasses launcher)
+uv run python -m yt_playlists [--debug] [--no-dashboard] [playlists_file]
+
+# Check logs
+tail -f logs/debug.log
+cat logs/unavailable-videos.txt
 ```
 
-## Architecture Overview
+## Architecture
 
-### Core Components
-1. **download_playlists.sh**: Main bash script that orchestrates parallel downloads
-   - Uses `yt-dlp` for downloading and `ffmpeg` for MP3 conversion
-   - Implements parallel processing (default: 10 concurrent jobs)
-   - Maintains download archive to prevent re-downloads
+### Execution phases (orchestrated in `yt_playlists/__main__.py`)
+1. **Update** — `updater.py`: `pip install --upgrade yt-dlp` in-venv, brew fallback.
+2. **Scan** — `scanner.py`: parallel `extract_flat=True` per playlist, diffs IDs against the archive.
+3. **Download** — `downloader.py`: `ThreadPoolExecutor` of N playlists; each `YoutubeDL.download()` runs with a `progress_hooks` callback feeding the live dashboard.
+4. **Summary** — `summary.py`: per-playlist outcome grid, archive total, unavailable-video report.
 
-### Directory Structure
+### Module map
+- `__main__.py` — CLI parsing, phase orchestration, dashboard mode selection
+- `config.py` — paths (`OUTPUT_ROOT`, `ARCHIVES_DIR`, …), `PARALLEL_JOBS`
+- `scanner.py` — `ScanResult`, parallel scan
+- `downloader.py` — `Downloader`, `_PerPlaylistContext` (hook state), `PlaylistOutcome`
+- `dashboard.py` — `Dashboard` ABC + three impls: `BarDashboard` (rich Progress, brew-style), `SummaryDashboard` (single live line), `PlainDashboard` (no TTY, one stdout line per event)
+- `archive.py` — `sanitize_name`, archive read/diff/count
+- `unavailable.py` — `UnavailableTracker` (thread-safe collector of failed videos + bot-block detection)
+- `summary.py` — final report rendering
+- `orphan_cleaner.py` — `--clean-orphans` subcommand
+- `updater.py` — startup yt-dlp update (pip → brew fallback)
+- `ydl_logger.py` — custom yt-dlp `logger` funneling output to `debug.log` and an error sink
+
+### Dashboard contract
+`Dashboard` is a context manager. `add_playlist(name, total_new)` returns a `PlaylistTaskHandle` with three methods:
+- `update_song(title, pct)` — called per yt-dlp `progress_hooks` 'downloading' event
+- `song_completed(song_title, songs_done)` — called per 'finished' event (deduped by video id; yt-dlp 2026 fires PP hooks twice)
+- `playlist_completed(songs_done, failed=False)` — called when the playlist's `ydl.download()` returns
+
+Mode selection in `__main__._pick_dashboard_mode`:
+- not a TTY → `plain`
+- `--no-dashboard` → `summary`
+- default → `bars`
+
+### Key design decisions
+1. **Pure-Python pipeline**: uses `yt_dlp` as a library (`YoutubeDL` class), not subprocess. Progress arrives as structured dicts from `progress_hooks`, no stdout regex parsing.
+2. **Temporary download dir**: each playlist downloads into `tempfile.mkdtemp(prefix="ytdl-")`, mp3s are moved to `OUTPUT_ROOT/<playlist>/` only after `ydl.download()` returns. Prevents partial files in the library.
+3. **Per-playlist archive**: `logs/archives/<safe_name>.txt` — same song can live in multiple playlists, each tracked independently.
+4. **Hook dedup by video id**: yt-dlp 2026.x fires postprocessor hooks twice; we count songs via `progress_hooks` 'finished' and keep a `set` of seen ids in `_PerPlaylistContext`.
+5. **Thread-based parallelism**: yt-dlp is I/O-bound, so `ThreadPoolExecutor` is sufficient and avoids pickling state for processes.
+6. **Console highlight disabled**: `Console(highlight=False)` in `__main__` — otherwise rich auto-colors numbers in playlist names ("Top **100** Daily").
+
+### Configuration
+- `OUTPUT_ROOT` env var overrides destination (default: `<repo parent>/Youtube Downloads`).
+- `--parallel N` overrides `PARALLEL_JOBS` (default 10).
+- `--debug` enables verbose yt-dlp logging to `logs/debug.log`.
+
+### Directory layout
 ```
 yt-playlists-downloader/
-├── config/
-│   ├── playlists.txt        # User's playlist URLs
-│   └── playlists.example.txt # Example playlist file
+├── download_playlists.sh   # launcher: uv sync && uv run -m yt_playlists
+├── pyproject.toml          # deps: yt-dlp, rich
+├── yt_playlists/           # package (see module map above)
+├── config/playlists.txt    # user URLs (gitignored)
 ├── logs/
-│   ├── archives/              # Per-playlist download histories
-│   │   └── [Playlist Name].txt
-│   └── unavailable-videos.txt # Failed downloads from current run
-├── download_playlists.sh     # Main script
-├── README.md
-└── CLAUDE.md
-
-../Youtube Downloads/         # Music files (parent directory)
-└── [Playlist Name]/
-    └── Artist - Song Title.mp3
+│   ├── archives/<Playlist>.txt
+│   ├── debug.log
+│   └── unavailable-videos.txt
+├── test.sh                 # smoke runner
+└── test_downloads/         # smoke test output (gitignored)
 ```
-
-### Key Design Decisions
-1. **Temporary Downloads**: Uses system temp directory during download to prevent partial files
-2. **Archive System**: Each playlist has its own archive file in `logs/archives/[Playlist Name].txt` to track downloaded videos
-3. **Error Tracking**: `logs/unavailable-videos.txt` logs failed downloads for current session only (cleared on each run)
-4. **Progress Tracking**: Uses temporary file to count current session downloads
-
-### Configuration Variables
-- `PLAYLIST_FILE`: Input file with playlist URLs (default: `config/playlists.txt`)
-- `OUTPUT_ROOT`: Download destination (default: `../Youtube Downloads`)
-- `PARALLEL_JOBS`: Number of concurrent downloads (default: 10)
-- Archive files are automatically created per playlist in `logs/archives/`
-
-### Output Format
-- Files named: `Artist - Song Title.mp3`
-- Max title length: 100 characters
-- Audio quality: Best available (yt-dlp quality 0)
-- Metadata preserved in MP3 tags
 
 ## Common Development Tasks
 
-### Code Quality Checks
-**IMPORTANT**: Always run shellcheck after making changes to bash scripts:
+### Adding a new dashboard mode
+1. Subclass `Dashboard` in `dashboard.py`, implement `start/stop/add_playlist`.
+2. Implement a corresponding handle class with `update_song`, `song_completed`, `playlist_completed`.
+3. Add the mode string to `make_dashboard()` and to `__main__._pick_dashboard_mode`.
+
+### Modifying download behavior
+yt-dlp options are built in `downloader._build_ydl_opts`. The format string for output paths is `outtmpl`. The `FFmpegExtractAudio` postprocessor handles MP3 conversion (quality 0 = best).
+
+### Testing changes
 ```bash
-# Install shellcheck if needed
-brew install shellcheck
-
-# Run linting on the main script
-shellcheck download_playlists.sh
-
-# Fix any warnings before committing
+./test.sh                              # full smoke test
+uv run python -m yt_playlists --help   # CLI help
+uv run python -c "from yt_playlists import dashboard"  # import smoke
 ```
 
-### Modifying Download Behavior
-The main yt-dlp command is in the `download_playlist()` function:
-```bash
-yt-dlp --extract-audio --audio-format mp3 --audio-quality 0 ...
-```
+`test.sh` clears the test playlist archives and downloads into `./test_downloads/` — safe to run without affecting the real library.
 
-### Adding New Features
-- Parallel processing logic is in the main loop at the bottom of the script
-- Error handling for unavailable videos is in the `download_playlist()` function
-- Filename cleaning happens post-download in the same function
+### Debugging
+- `--debug` writes verbose yt-dlp output to `logs/debug.log` (truncated each run).
+- `--no-dashboard` switches to a single-line live summary — useful when the multi-bar view is making it hard to read errors.
+- `--parallel 1` serializes downloads for easier inspection.
 
-### Testing Changes
-1. Create a test playlist file with 1-2 small playlists
-2. Run with modified `PARALLEL_JOBS=1` for easier debugging
-3. Check output files in `logs/` directory
-4. Run `shellcheck download_playlists.sh` to ensure code quality
+### Linting
+No mandatory linter, but `ruff check yt_playlists/` is a reasonable starting point if added later. The bash launcher is intentionally trivial — no shellcheck enforcement is needed.
 
-## Code Quality Requirements
-
-### Shellcheck Linting
-**IMPORTANT**: All bash scripts must pass shellcheck without warnings:
-```bash
-# Install shellcheck if not available
-which shellcheck || brew install shellcheck
-
-# Run linting
-shellcheck download_playlists.sh
-```
-
-Common shellcheck issues to watch for:
-- SC2046: Quote command substitutions to prevent word splitting
-- SC2155: Declare and assign variables separately
-- SC2188: Redirections without commands need `true` or `:` 
-- SC2086: Double quote variables to prevent globbing
-
-If shellcheck reports any issues, fix them before considering the code complete.
+## Output Format
+- Files: `<OUTPUT_ROOT>/<Playlist Name>/Artist - Song Title.mp3`
+- Title max 100 chars (yt-dlp `%(title).100s`)
+- Audio quality 0 (best available)
+- MP3 metadata preserved by yt-dlp's `FFmpegExtractAudio` postprocessor
