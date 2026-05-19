@@ -98,12 +98,41 @@ def _ydl_opts(
 ) -> dict:
     return {
         "format": "bestaudio/best",
+        # Postprocessor order is load-bearing:
+        #   1. FFmpegExtractAudio — re-encodes best audio stream to MP3 V0.
+        #   2. MetadataFromField — splits "Artist - Title" out of the video
+        #      title BEFORE tagging + filename templating, populating the
+        #      artist field for both ID3 tags and the %(artist&…|)s filename
+        #      slot. Non-matching titles (e.g. "Warp") fall through unchanged.
+        #      Uses the CLI-shape "FROM:TO" string because the Python-API
+        #      `MetadataParser` key takes enum members yt-dlp considers private.
+        #   3. FFmpegMetadata — writes ID3 tags from yt-dlp's info_dict (title,
+        #      artist, date, comment, and album when YouTube Music exposes one).
+        #      No chapter markers — songs are atomic.
+        #   4. EmbedThumbnail — embeds the video thumbnail as the ID3v2 APIC
+        #      frame and removes the sidecar file it just wrote.
+        # Album is intentionally NOT mapped from playlist_title: these playlists
+        # are mood collections, not albums; mapping would write a lie.
+        "writethumbnail": True,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "0",
-            }
+            },
+            {
+                "key": "MetadataFromField",
+                "formats": [r"title:^(?P<artist>.+?) - (?P<title>.+)$"],
+            },
+            {
+                "key": "FFmpegMetadata",
+                "add_metadata": True,
+                "add_chapters": False,
+            },
+            {
+                "key": "EmbedThumbnail",
+                "already_have_thumbnail": False,
+            },
         ],
         "download_archive": str(archive),
         "concurrent_fragment_downloads": config.FRAGMENT_CONCURRENCY,
