@@ -1,14 +1,12 @@
 [project]
-name = "yt-playlists-downloader"
-version = "0.2.0"
-description = "Parallel YouTube playlist → MP3 downloader with a brew-style multi-progress dashboard"
+name = "yt-playlists-next"
+version = "0.3.0"
+description = "Spotify-first music library downloader. Discover [DJ]-tagged Spotify playlists, match to YouTube, embed tags + cover art."
 requires-python = ">=3.11"
 dependencies = [
-    # Floor matches what's been validated: the dedup-by-id hook handling assumes
-    # the 2026.x progress_hook semantics. Older yt-dlp may fire 'finished' under
-    # different conditions.
     "yt-dlp>=2026.0.0",
     "rich>=13.7.0",
+    "spotipy>=2.24.0",
 ]
 
 [project.optional-dependencies]
@@ -33,7 +31,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
-ignore = ["E501"]  # line length handled by formatter
+ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

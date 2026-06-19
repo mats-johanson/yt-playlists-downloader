@@ -1,3 +1,5 @@
+"""End-of-run summary with per-folder source breakdown + unmatched section."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,6 +11,7 @@ from rich.table import Table
 from .archive import total_archived
 from .config import PLAYLIST_NAME_COL_WIDTH
 from .outcomes import OutcomeReason, PlaylistOutcome
+from .tracks import PlannedFolder
 from .unavailable import UnavailableTracker
 
 _FAILED_REASON_LABEL: dict[OutcomeReason, str] = {
@@ -17,52 +20,44 @@ _FAILED_REASON_LABEL: dict[OutcomeReason, str] = {
 }
 
 
-def render_scan_results(console: Console, scans) -> None:
-    up_to_date = 0
-    table = Table.grid(padding=(0, 2))
-    table.add_column(justify="left")
-    table.add_column(justify="right")
-    table.add_column(justify="left")
-
-    any_rows = False
-    for scan in scans:
-        if scan.new_count > 0:
-            table.add_row(
-                f"  {escape(scan.name)}",
-                f"{scan.total} videos",
-                f"[bold]{scan.new_count} new[/]",
-            )
-            any_rows = True
-        else:
-            up_to_date += 1
-
-    if any_rows:
-        console.print(table)
-    if up_to_date:
-        console.print(f"  [dim]({up_to_date} playlists up to date)[/]")
-    console.print()
-
-
 def _truncate(name: str, width: int) -> str:
     if len(name) > width:
         return name[: width - 1] + "…"
     return name
 
 
+def render_discovered(console: Console, folders: list[PlannedFolder]) -> None:
+    if not folders:
+        console.print("[yellow]No playlists matched any source.[/]")
+        return
+    console.print(f"[bold]{len(folders)}[/] folder(s) planned:\n")
+    for f in folders:
+        spotify_n = sum(1 for r in f.resolved if r.spotify is not None)
+        yt_only_n = sum(1 for r in f.resolved if r.spotify is None)
+        line = f"  [bold]{escape(f.folder_name)}[/] — {len(f.resolved)} track(s)"
+        if spotify_n:
+            line += f" (Spotify: {spotify_n})"
+        if yt_only_n:
+            line += f" (YouTube: {yt_only_n})"
+        if f.unmatched:
+            line += f" [red]+{len(f.unmatched)} unmatched[/]"
+        if f.merge_note:
+            line += f" [dim]← merge: {escape(f.merge_note)}[/]"
+        console.print(line)
+    console.print()
+
+
 def _outcome_row(outcome: PlaylistOutcome, unavailable_count: int) -> str:
     name = _truncate(outcome.name, PLAYLIST_NAME_COL_WIDTH)
-
     if outcome.reason is OutcomeReason.DONE:
         return f"  [green]✓[/] {name:<{PLAYLIST_NAME_COL_WIDTH}} {outcome.songs_done:>3}"
-
     if outcome.reason is OutcomeReason.EMPTY:
-        # Not a failure: the playlist had no fetchable new content this run.
-        # If we recorded individual unavailables, name the actual cause.
         label = (
-            f"{unavailable_count} unavailable" if unavailable_count else "no new songs"
+            f"{unavailable_count} unavailable"
+            if unavailable_count
+            else "skipped (all failed)"
         )
         return f"  [dim]•[/] {name:<{PLAYLIST_NAME_COL_WIDTH}} [dim]{label}[/]"
-
     label = _FAILED_REASON_LABEL.get(outcome.reason, "fail")
     return f"  [red]✗[/] {name:<{PLAYLIST_NAME_COL_WIDTH}} [red]{label}[/]"
 
@@ -70,17 +65,18 @@ def _outcome_row(outcome: PlaylistOutcome, unavailable_count: int) -> str:
 def render_final_summary(
     console: Console,
     outcomes: list[PlaylistOutcome],
+    folders: list[PlannedFolder],
     *,
     archives_dir: Path,
     unavailable: UnavailableTracker,
     output_root: Path,
     debug_log: Path,
+    unmatched_log: Path,
 ) -> None:
     total_downloaded = sum(o.songs_done for o in outcomes)
     console.rule()
     console.print(f"Done — [bold]{total_downloaded}[/] songs downloaded\n")
 
-    # Two-column outcome grid.
     grid = Table.grid(padding=(0, 4))
     grid.add_column()
     grid.add_column()
@@ -98,6 +94,15 @@ def render_final_summary(
     if archived:
         console.print(f"\n[dim]{archived} total songs in archive[/]")
 
+    # Unmatched Spotify tracks: surface for manual override.
+    total_unmatched = sum(len(f.unmatched) for f in folders)
+    if total_unmatched:
+        console.print(
+            f"\n[yellow]{total_unmatched} Spotify track(s) unmatched[/] — "
+            f"see {unmatched_log} to add manual overrides to "
+            f"config/spotify_overrides.toml"
+        )
+
     entries = unavailable.entries()
     if entries:
         console.print("\nUnavailable videos:")
@@ -109,10 +114,10 @@ def render_final_summary(
         console.print("\n[bold red]Bot-block detected[/] for:")
         for name in sorted(blocked):
             console.print(f"  [red]✗[/] {name}")
-        console.print(f"  [dim]→ see {debug_log} for HTTP 429 / sign-in messages[/]")
+        console.print(f"  [dim]→ see {debug_log}[/]")
 
     any_failed = any(o.failed for o in outcomes)
     if any_failed and not blocked:
-        console.print(f"\n[dim]Details for failures: {debug_log}[/]")
+        console.print(f"\n[dim]Details: {debug_log}[/]")
 
     console.print(f"\n[dim]Files saved to: {output_root}[/]")

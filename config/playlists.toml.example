@@ -1,0 +1,12 @@
+# Copy to playlists.toml and edit.
+
+[sources.spotify]
+# Case-insensitive, word-bounded match in playlist description. Default: [DJ]
+tag = "[DJ]"
+
+[sources.youtube]
+# One-off extras for tracks not on Spotify. The playlist's own title becomes
+# the local folder name (sanitized).
+playlists = [
+    # "https://www.youtube.com/playlist?list=PLh4d96gc6mcbxnKnz2wmq52mIgaCIC9gR",
+]

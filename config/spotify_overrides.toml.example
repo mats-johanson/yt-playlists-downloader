@@ -1,0 +1,5 @@
+# Manual overrides for Spotify tracks whose auto-match was wrong.
+# Copy to spotify_overrides.toml. Format: spotify_track_id = "youtube_video_id"
+#
+# Example:
+#   "3n3Ppam7vgaVa1iaRUc9Lp" = "dQw4w9WgXcQ"

@@ -79,6 +79,16 @@ class UnavailableTracker:
         with self._lock:
             return set(self._bot_blocked)
 
+    def any_bot_blocked(self) -> bool:
+        """True if any playlist in this run has tripped YouTube's bot-check.
+
+        Used as a global circuit-breaker: once the IP is flagged, further
+        requests just fail the same way and may extend the block, so the
+        downloader stops issuing them.
+        """
+        with self._lock:
+            return bool(self._bot_blocked)
+
     def count_for(self, playlist: str) -> int:
         with self._lock:
             return sum(1 for e in self._entries if e.playlist == playlist)

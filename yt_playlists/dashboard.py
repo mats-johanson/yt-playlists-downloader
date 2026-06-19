@@ -32,7 +32,10 @@ TITLE_WIDTH = 40
 
 _OUTCOME_LABEL: dict[OutcomeReason, str] = {
     OutcomeReason.DONE: "done",
-    OutcomeReason.EMPTY: "no new songs",
+    # EMPTY only reaches the dashboard for playlists where scan saw new videos
+    # (has_work filter in __main__). Getting 0 downloads means yt-dlp tried all
+    # N and every one failed — typically unavailable/private/age-restricted.
+    OutcomeReason.EMPTY: "skipped (all failed)",
     OutcomeReason.BOT_BLOCKED: "bot-blocked",
     OutcomeReason.ERROR: "error",
 }
