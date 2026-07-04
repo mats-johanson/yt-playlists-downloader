@@ -1,75 +1,105 @@
-from pathlib import Path
+"""Tests for `UnavailableTracker`'s per-run and persistent state."""
 
-from yt_playlists.unavailable import _VIDEO_ID_RE, UnavailableTracker
-
-
-def test_video_id_re_matches_standard_format():
-    m = _VIDEO_ID_RE.search("[youtube] dQw4w9WgXcQ: Video unavailable")
-    assert m is not None
-    assert m.group(1) == "dQw4w9WgXcQ"
+from yt_playlists.unavailable import UnavailableTracker
 
 
-def test_video_id_re_ignores_other_extractors():
-    assert _VIDEO_ID_RE.search("[vimeo] abc123: Video unavailable") is None
+def test_per_run_unavailable_recorded(tmp_path):
+    tr = UnavailableTracker(tmp_path / "unavail.txt")
+    tr.record_error("MyPlaylist", "[youtube] abc12345: Video unavailable in your region")
+    assert len(tr.entries()) == 1
+    assert tr.count_for("MyPlaylist") == 1
 
 
-def test_video_id_re_handles_underscores_and_dashes():
-    m = _VIDEO_ID_RE.search("[youtube] AB_cd-12X: gone")
-    assert m is not None
-    assert m.group(1) == "AB_cd-12X"
+def test_bot_block_phrases_recorded(tmp_path):
+    tr = UnavailableTracker(tmp_path / "unavail.txt")
+    tr.record_error("MyPlaylist", "Sign in to confirm you're not a bot")
+    assert tr.is_bot_blocked("MyPlaylist")
+    assert tr.any_bot_blocked()
 
 
-def test_record_error_persists_unavailable(tmp_path: Path):
-    log = tmp_path / "unavailable.txt"
-    t = UnavailableTracker(log)
-    t.reset()
-    t.record_error("Mix A", "[youtube] dQw4w9WgXcQ: Video unavailable")
-    entries = t.entries()
-    assert len(entries) == 1
-    assert entries[0].playlist == "Mix A"
-    assert entries[0].url.endswith("dQw4w9WgXcQ")
-    assert log.read_text().strip() == "Mix A|https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+def test_reset_run_state_clears_per_run_only(tmp_path):
+    dead = tmp_path / "dead.txt"
+    tr = UnavailableTracker(tmp_path / "unavail.txt", dead_videos_file=dead)
+    tr.record_error(
+        "P",
+        "[youtube] DEAD12345: Video unavailable. This video is no longer "
+        "available because the YouTube account associated with this video "
+        "has been terminated.",
+    )
+    assert tr.is_known_dead("DEAD12345")
+    assert tr.count_for("P") == 1
+
+    tr.reset_run_state()
+    assert tr.count_for("P") == 0
+    # Persistent dead-list survives reset.
+    assert tr.is_known_dead("DEAD12345")
 
 
-def test_constructor_does_not_truncate(tmp_path: Path):
-    log = tmp_path / "u.txt"
-    log.write_text("preexisting\n")
-    UnavailableTracker(log)  # must not touch the file
-    assert log.read_text() == "preexisting\n"
+def test_dead_list_persists_across_instances(tmp_path):
+    dead = tmp_path / "dead.txt"
+    tr1 = UnavailableTracker(tmp_path / "unavail.txt", dead_videos_file=dead)
+    tr1.record_error(
+        "P",
+        "[youtube] DEAD12345: Video unavailable. This video is no longer "
+        "available due to a copyright claim by [Merlin] K7 Records",
+    )
+    assert tr1.is_known_dead("DEAD12345")
+
+    # Fresh instance reads the same persistent file.
+    tr2 = UnavailableTracker(tmp_path / "unavail.txt", dead_videos_file=dead)
+    assert tr2.is_known_dead("DEAD12345")
 
 
-def test_reset_truncates(tmp_path: Path):
-    log = tmp_path / "u.txt"
-    log.write_text("preexisting\n")
-    t = UnavailableTracker(log)
-    t.reset()
-    assert log.read_text() == ""
+def test_dead_list_uniques_not_duplicated(tmp_path):
+    dead = tmp_path / "dead.txt"
+    tr = UnavailableTracker(tmp_path / "unavail.txt", dead_videos_file=dead)
+    for _ in range(3):
+        tr.record_error(
+            "P",
+            "[youtube] SAME1234: Video unavailable. The YouTube account "
+            "associated with this video has been terminated.",
+        )
+    assert dead.read_text().count("SAME1234") == 1
 
 
-def test_bot_block_detection(tmp_path: Path):
-    t = UnavailableTracker(tmp_path / "u.txt")
-    t.reset()
-    t.record_error("Mix A", "ERROR: Sign in to confirm you're not a bot")
-    t.record_error("Mix B", "ERROR: HTTP Error 429: Too Many Requests")
-    assert t.is_bot_blocked("Mix A")
-    assert t.is_bot_blocked("Mix B")
-    assert not t.is_bot_blocked("Mix C")
-    assert t.bot_blocked_playlists() == {"Mix A", "Mix B"}
+def test_transient_unavailable_not_marked_dead(tmp_path):
+    """A bare 'Video unavailable' without a permanent-failure phrase should
+    NOT land in the persistent dead-list — could still be a transient issue.
+    """
+    dead = tmp_path / "dead.txt"
+    tr = UnavailableTracker(tmp_path / "unavail.txt", dead_videos_file=dead)
+    tr.record_error("P", "[youtube] MAYBE12345: Video unavailable")
+    assert not tr.is_known_dead("MAYBE12345")
+    assert not dead.exists() or dead.read_text() == ""
 
 
-def test_record_error_ignores_non_unavailable(tmp_path: Path):
-    t = UnavailableTracker(tmp_path / "u.txt")
-    t.reset()
-    t.record_error("Mix", "[youtube] dQw4w9WgXcQ: Some unrelated message")
-    assert t.entries() == []
+def test_bare_403_circuit_breaks_run_not_marks_dead(tmp_path):
+    """An HTTP 403 on the video data fetch means YT is rate-limiting OUR client.
+    The video is fine; we just need to stop hammering. The dead-list must NOT
+    grow on a 403 (the video isn't dead), but bot-block circuit MUST trip so
+    we don't deepen the rate-limit hole.
+    """
+    dead = tmp_path / "dead.txt"
+    tr = UnavailableTracker(tmp_path / "unavail.txt", dead_videos_file=dead)
+    tr.record_error(
+        "MyPlaylist",
+        "[youtube] LIVE12345: ERROR: unable to download video data: "
+        "HTTP Error 403: Forbidden",
+    )
+    assert tr.any_bot_blocked()
+    assert tr.is_bot_blocked("MyPlaylist")
+    assert not tr.is_known_dead("LIVE12345")
+    assert not dead.exists() or dead.read_text() == ""
 
 
-def test_count_for_groups_by_playlist(tmp_path: Path):
-    t = UnavailableTracker(tmp_path / "u.txt")
-    t.reset()
-    t.record_error("Cool", "[youtube] aaaaaaaaaaa: Video unavailable")
-    t.record_error("Cool", "[youtube] bbbbbbbbbbb: Private video")
-    t.record_error("Deep", "[youtube] ccccccccccc: has been removed")
-    assert t.count_for("Cool") == 2
-    assert t.count_for("Deep") == 1
-    assert t.count_for("Unknown") == 0
+def test_known_dead_returns_false_for_unrelated(tmp_path):
+    tr = UnavailableTracker(tmp_path / "unavail.txt")
+    assert not tr.is_known_dead("LiveVidId")
+
+
+def test_dead_file_comments_ignored(tmp_path):
+    dead = tmp_path / "dead.txt"
+    dead.write_text("# manually added\nDEAD12345\n\n# trailing\nDEAD67890\n")
+    tr = UnavailableTracker(tmp_path / "unavail.txt", dead_videos_file=dead)
+    assert tr.is_known_dead("DEAD12345")
+    assert tr.is_known_dead("DEAD67890")

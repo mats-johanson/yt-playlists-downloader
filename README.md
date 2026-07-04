@@ -1,99 +1,102 @@
-# YouTube Playlists Downloader
+# Spotify Crate Downloader
 
-Downloads YouTube playlists as MP3 with a Homebrew-style live multi-bar dashboard. Parallel downloads, per-playlist archive tracking, no re-downloads.
+Download your Spotify playlists as fully-tagged MP3s, organized into mood-named folders.
+You curate playlists in Spotify; this tool matches each track to a YouTube video, downloads
+it as MP3 V0, and writes proper ID3 tags + cover art from Spotify's metadata.
 
-## Requirements
+Files land in `../Synced Music/<Playlist Name>/Artist - Title.mp3`.
 
-- Python 3.11+
-- `ffmpeg` (audio conversion)
-- [`uv`](https://docs.astral.sh/uv/) (recommended) or `python3 -m venv` fallback
+> Audio comes from YouTube. Spotify is used only for your track lists and metadata — nothing
+> is ever downloaded from Spotify.
 
-Install on macOS:
+## 1. Get the code
+
 ```bash
-brew install ffmpeg uv
+git clone https://github.com/mats-johanson/yt-playlists-downloader.git
+cd yt-playlists-downloader
 ```
 
-`yt-dlp` and `rich` are installed automatically into a local virtual environment on first run.
+Everything below runs from inside this folder.
 
-## Setup
+## 2. Install the tools
 
-1. Clone the repository.
-2. Create `config/playlists.txt` with your playlist URLs (one per line):
+```bash
+brew install ffmpeg deno uv
+```
+
+(macOS. `ffmpeg` converts audio, `deno` solves YouTube's bot challenges, `uv` runs the app.
+Everything Python is installed automatically on first run.)
+
+## 3. Connect your Spotify account
+
+The tool reads playlists through Spotify's API, which needs a free personal "app" for the login:
+
+1. Open <https://developer.spotify.com/dashboard> and click **Create app**.
+2. Set **Redirect URI** to exactly `http://127.0.0.1:8765/callback`, tick the **Web API**, save.
+3. Copy the app's **Client ID** (you don't need the secret).
+4. Put it in a `.env` file at the project root:
+   ```bash
+   cp .env.example .env      # then paste your Client ID into SPOTIFY_CLIENT_ID
    ```
-   https://www.youtube.com/playlist?list=PLxxxxxxxxxxxxxx
-   https://www.youtube.com/playlist?list=PLyyyyyyyyyyyy
-   ```
 
-## Usage
+The first run opens your browser once to approve access; the login is cached after that.
+
+## 4. Pick which playlists to download
+
+In Spotify, add **`[DJ]`** anywhere in the **description** of each playlist you want downloaded.
+That's the whole selection mechanism — tagged playlists are in, everything else is ignored.
+
+## 5. Run
 
 ```bash
 ./download_playlists.sh
 ```
 
-MP3 files are saved to `../Youtube Downloads/[Playlist Name]/`.
+You'll see a live progress bar per playlist. When it finishes you get a summary of what
+downloaded and anything that couldn't be matched. Re-run any time — already-downloaded tracks
+are skipped, so it only fetches what's new.
 
-### Flags
+---
 
-```
-./download_playlists.sh [--clean-orphans] [--no-dashboard] [--debug]
-                        [--parallel N] [playlists_file]
-```
+## Fixing a wrong match
 
-- `--clean-orphans` — empty archive files whose output folder is missing/empty.
-- `--no-dashboard` — single-line live summary instead of the multi-bar view.
-- `--debug` — verbose yt-dlp output to `logs/debug.log`.
-- `--parallel N` — number of concurrent downloads (default 10).
-- `playlists_file` — alternative URL file (default `config/playlists.txt`).
+Some tracks resolve to the wrong video (live takes, covers, remixes). After a run, `logs/unmatched.txt`
+lists anything that scored too low. To pin a specific YouTube video for a track, drop a line into
+`config/spotify_overrides.toml`:
 
-The dashboard auto-disables when stdout isn't a terminal (CI, log files); in that mode it prints one line per completed song.
-
-## Testing
-
-```bash
-./test.sh
+```toml
+# <spotify_track_id> = "<youtube_video_id>"
+"3n3Ppam7vgaVa1iaRUc9Lp" = "dQw4w9WgXcQ"
 ```
 
-Downloads a small set of test playlists into `./test_downloads/` so changes can be validated without touching the main library.
-
-## Files Created
-
-- `logs/archives/<Playlist Name>.txt` — per-playlist download history; same song can appear in multiple playlists.
-- `logs/unavailable-videos.txt` — videos that failed in the current run (private, removed, region-blocked).
-- `logs/debug.log` — yt-dlp warnings/errors and `--debug` verbose output.
-
-## Layout
+## Options
 
 ```
-yt-playlists-downloader/
-├── download_playlists.sh    # thin launcher: uv sync + uv run -m yt_playlists
-├── pyproject.toml           # Python package metadata (yt-dlp, rich)
-├── yt_playlists/            # all logic
-│   ├── __main__.py          # CLI + orchestration
-│   ├── config.py            # paths, constants
-│   ├── scanner.py           # parallel playlist scan
-│   ├── downloader.py        # parallel download + yt-dlp progress hooks
-│   ├── dashboard.py         # multi-bar / summary / plain renderers
-│   ├── archive.py           # archive read / diff
-│   ├── unavailable.py       # tracker for failed videos
-│   ├── summary.py           # final report
-│   ├── orphan_cleaner.py    # --clean-orphans subcommand
-│   ├── updater.py           # auto-update yt-dlp at startup
-│   └── ydl_logger.py        # custom yt-dlp logger → debug.log + error sink
-├── config/
-│   └── playlists.txt        # user playlist URLs (gitignored)
-├── logs/
-│   ├── archives/            # per-playlist archives
-│   ├── debug.log
-│   └── unavailable-videos.txt
-└── test.sh                  # smoke test runner
+./download_playlists.sh [--no-dashboard] [--debug] [--logout] [--clean-orphans]
 ```
 
-## Features
+| Flag | Effect |
+|---|---|
+| `--no-dashboard` | Single-line progress instead of the multi-bar view |
+| `--debug` | Verbose yt-dlp output to `logs/debug.log` |
+| `--logout` | Forget the Spotify login (re-auth on next run) |
+| `--clean-orphans` | Reset download history for folders you've deleted |
 
-- Brew-style multi-progress dashboard with byte-level fill per current song.
-- Parallel downloads (10 concurrent by default).
-- Per-playlist archive tracking — a song can live in multiple playlists.
-- MP3 metadata preserved via yt-dlp's `FFmpegExtractAudio` postprocessor.
-- Scroll-above-dashboard log of completed songs.
-- Auto-update of yt-dlp at startup.
-- Orphaned archive detection and cleaning.
+- Set `OUTPUT_ROOT=/path/to/music` to change where files are saved.
+- Want to add a YouTube playlist that isn't on Spotify, or use a tag other than `[DJ]`?
+  `cp config/playlists.toml.example config/playlists.toml` and edit it. Optional — the tool
+  runs fine without it.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| **"No Spotify playlists matched [DJ]"** | Make sure `[DJ]` is in the playlist *description* (not the title). Spotify caches edits ~30s. |
+| **"Port 8765 in use"** | Set `SPOTIFY_REDIRECT_PORT=8766` in `.env` **and** update the Redirect URI in your Spotify app to match. |
+| **Login refused / expired** | `./download_playlists.sh --logout`, then run again. |
+| **403 / "Sign in to confirm"** | Confirm `deno` is installed and on your `PATH`. |
+
+## For developers
+
+Architecture, module map, matcher tuning, and the full file layout live in
+[`CLAUDE.md`](CLAUDE.md). Tests: `uv run --extra dev pytest`.

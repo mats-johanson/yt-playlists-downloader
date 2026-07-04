@@ -1,51 +1,17 @@
-# Downloaded content (stored in parent directory)
-../Youtube Downloads/
-
-# Logs directory (contains output files)
-logs/
-
-# User configuration
-config/playlists.txt
-
-# IDE files
-.idea/
-*.iml
-
-# macOS
-.DS_Store
-
-# Temporary files
-*.tmp
-*.log
-
-# Audio files (to avoid accidentally committing copyrighted content)
-*.mp3
-*.m4a
-*.wav
-*.flac
-*.aac
-*.ogg
-*.opus
-
-# Video files
-*.mp4
-*.mkv
-*.webm
-*.avi
-*.mov
-
-# Archive and backup files
-*.bak
-*.backup
-*~
-
-# Python
 .venv/
 __pycache__/
 *.pyc
-*.pyo
 *.egg-info/
-
-# Smoke-test output
+.pytest_cache/
+.ruff_cache/
+.env
+config/playlists.toml
+config/spotify_overrides.toml
+logs/
+.tmp/
 test_downloads/
-testlol/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
