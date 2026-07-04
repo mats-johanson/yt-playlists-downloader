@@ -1,5 +1,8 @@
 """Dry-run: discover + resolve + plan; print results; no downloads.
 
+Writes to logs/{resolutions,unmatched}.diag.{log,txt} so the production
+unmatched.txt the user just curated isn't clobbered.
+
 Run via:  uv run python diagnose_resolve.py
 """
 
@@ -12,25 +15,24 @@ from yt_playlists.config_loader import load as load_config
 from yt_playlists.match_cache import MatchCache
 from yt_playlists.overrides import Overrides
 from yt_playlists.pipeline import Pipeline
+from yt_playlists.unavailable import UnavailableTracker
 
 
 def main() -> int:
     console = Console(highlight=False)
     config.ensure_dirs()
 
-    try:
-        cfg = load_config()
-    except FileNotFoundError as e:
-        console.print(f"[red]{e}[/]")
-        return 1
+    cfg = load_config()
 
-    # Fresh resolution log + unmatched log for this run.
-    config.RESOLUTIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
-    config.RESOLUTIONS_LOG.write_text("", encoding="utf-8")
-    config.UNMATCHED_LOG.write_text("", encoding="utf-8")
+    diag_resolutions = config.LOGS_DIR / "resolutions.diag.log"
+    diag_unmatched = config.LOGS_DIR / "unmatched.diag.txt"
+    diag_resolutions.parent.mkdir(parents=True, exist_ok=True)
+    diag_resolutions.write_text("", encoding="utf-8")
+    diag_unmatched.write_text("", encoding="utf-8")
 
     cache = MatchCache(config.MATCH_CACHE)
     overrides = Overrides(config.OVERRIDES_TOML)
+    unavailable = UnavailableTracker(config.UNAVAILABLE_FILE)
 
     pipeline = Pipeline(
         console=console,
@@ -38,8 +40,9 @@ def main() -> int:
         youtube_urls=cfg.youtube_urls,
         cache=cache,
         overrides=overrides,
-        resolutions_log=config.RESOLUTIONS_LOG,
-        unmatched_log=config.UNMATCHED_LOG,
+        unavailable=unavailable,
+        resolutions_log=diag_resolutions,
+        unmatched_log=diag_unmatched,
     )
 
     spotify_discovered, youtube_discovered = pipeline.discover()
@@ -58,8 +61,8 @@ def main() -> int:
             f"unmatched={len(f.unmatched)}"
         )
     console.print()
-    console.print(f"Detail: {config.RESOLUTIONS_LOG}")
-    console.print(f"Unmatched (paste-ready): {config.UNMATCHED_LOG}")
+    console.print(f"Detail: {diag_resolutions}")
+    console.print(f"Unmatched (paste-ready): {diag_unmatched}")
     return 0
 
 

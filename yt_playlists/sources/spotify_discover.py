@@ -67,5 +67,8 @@ class SpotifySource:
                 explicit=bool(track.get("explicit")),
                 isrc=isrc,
                 release_date=release_date,
+                # Spotify gives us the exact moment the user added this track to
+                # the playlist — surface it for Traktor IMPORT_DATE sync.
+                added_at=item.get("added_at"),
             )
             yield UnresolvedTrack(spotify=meta)

@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from yt_playlists.config_loader import load
 
 
@@ -10,9 +8,11 @@ def _write(p: Path, content: str) -> Path:
     return p
 
 
-def test_missing_file_raises(tmp_path: Path):
-    with pytest.raises(FileNotFoundError):
-        load(tmp_path / "no.toml")
+def test_missing_file_defaults(tmp_path: Path):
+    # An absent config is a valid zero-config run: default tag, no YT extras.
+    cfg = load(tmp_path / "no.toml")
+    assert cfg.spotify_tag == "[DJ]"
+    assert cfg.youtube_urls == []
 
 
 def test_full_config(tmp_path: Path):

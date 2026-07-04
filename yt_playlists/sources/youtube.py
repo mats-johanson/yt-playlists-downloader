@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as _dt
+
 from yt_dlp import YoutubeDL
 
 from ..archive import sanitize_name
@@ -17,9 +19,28 @@ _SCAN_OPTS = {
 }
 
 
+def _synth_added_at(position: int, total: int, today: _dt.date) -> str:
+    """Position-based discovery date for YT-only tracks.
+
+    For a playlist of `total` items, the video at `position` (1-based) gets
+    `today - (total - position) days`. Tracks added later in the playlist
+    (later by user habit — most append to the end) get later dates. Stable
+    across runs because each scan re-runs this with the SAME total; only
+    `today` shifts.
+
+    DiscoveryDates' merge policy keeps the EARLIEST date seen, so once a
+    video has been recorded, this re-derivation can't shift it later.
+    """
+    days_back = max(total - position, 0)
+    d = today - _dt.timedelta(days=days_back)
+    return d.isoformat() + "T00:00:00Z"
+
+
 class YouTubeSource:
-    def __init__(self, urls: list[str]):
+    def __init__(self, urls: list[str], *, today: _dt.date | None = None):
         self._urls = urls
+        # Injectable for tests so we don't depend on real `date.today()`.
+        self._today = today or _dt.date.today()
 
     def discover(self) -> list[DiscoveredPlaylist]:
         result: list[DiscoveredPlaylist] = []
@@ -45,12 +66,14 @@ class YouTubeSource:
         ]
         if not entries:
             return None
+        total = len(entries)
         tracks = [
             UnresolvedTrack(
                 youtube_video_id=e["id"],
                 youtube_title=e.get("title"),
+                added_at=_synth_added_at(position=idx + 1, total=total, today=self._today),
             )
-            for e in entries
+            for idx, e in enumerate(entries)
         ]
         return DiscoveredPlaylist(
             folder_name=sanitize_name(title),

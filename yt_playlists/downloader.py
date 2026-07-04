@@ -1,13 +1,15 @@
 """Provider-agnostic downloader.
 
 Eats `PlannedFolder` instances: a list of `ResolvedTrack`s that already point
-at concrete YouTube video IDs, optionally carrying Spotify metadata to override
-yt-dlp's title inference.
+at concrete YouTube video IDs, plus a pre-built per-video info_dict override
+map (`folder.info_overrides()`). The downloader doesn't know what source the
+overrides came from — Spotify, MusicBrainz, hand-written, whatever.
 
 Reused largely from v1; the changes are:
 - accepts `PlannedFolder` instead of `ScanResult`
-- builds a `{video_id: SpotifyTrackMeta}` map per playlist and constructs a
-  `SpotifyMetadataPP` over it, inserted before `FFmpegMetadata`
+- attaches a unified `MetadataPP` at pre_process, fed by `info_overrides()`
+  (the PP merges the dict into info_dict, falling back to "Artist - Title"
+  regex when no override exists for a video)
 - archive filename includes the stable playlist id (rename-safe)
 """
 
@@ -24,10 +26,11 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
 from . import config
-from .archive import archive_path
+from .archive import archive_path, filter_new, read_archive
 from .dashboard import Dashboard, PlaylistTaskHandle
+from .match_cache import MatchCache
 from .outcomes import OutcomeReason, PlaylistOutcome
-from .postprocessors.spotify_metadata import SpotifyMetadataPP
+from .postprocessors.spotify_metadata import MetadataPP
 from .tracks import PlannedFolder
 from .unavailable import UnavailableTracker
 from .ydl_logger import YDLLogger
@@ -104,12 +107,35 @@ def _build_ydl_opts(
         # under our local deno; cached after first fetch.
         "remote_components": ["ejs:github"],
         "writethumbnail": True,
+        # ZERO retries on any HTTP error. yt-dlp's defaults (10/10/3) spin on
+        # 403'd videos for ~5 minutes each via exponential backoff — those
+        # retries are wasted (the video isn't suddenly going to un-403) AND
+        # actively hostile, each one counts against YouTube's per-IP request
+        # budget. Spinning on a 403 storm is exactly how a soft rate-limit
+        # becomes a hard IP block. Skip fast; the next run picks up anything
+        # that was a genuinely transient blip — and persistent dead videos
+        # land in logs/dead-videos.txt so we never attempt them again.
+        "retries": 0,
+        "fragment_retries": 0,
+        "extractor_retries": 0,
+        # Stay polite — these three keep our request rate well under YouTube's
+        # per-IP ceiling so we don't earn a soft block (which then escalates
+        # into the 403 storm we just diagnosed in logs/debug.log on 14:11).
+        # sleep_interval_requests: per-HTTP-call jitter (page fetch, player
+        #   script fetch, fragment).
+        # sleep_interval / max_sleep_interval: random 1–3 s between videos
+        #   within a single playlist. With 10× parallel playlists, that
+        #   smooths the aggregate hit rate to YouTube nicely.
+        "sleep_interval_requests": 0.2,
+        "sleep_interval": 1,
+        "max_sleep_interval": 3,
+        # MetadataPP attached separately via add_post_processor at pre_process —
+        # it handles BOTH Spotify-canonical writes and the "Artist - Title"
+        # fallback regex for YouTube-only tracks. Removing the legacy
+        # MetadataFromField here eliminates a post_process re-stomp that was
+        # overwriting Spotify-canonical artist tags on multi-artist tracks.
         "postprocessors": [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"},
-            {
-                "key": "MetadataFromField",
-                "formats": [r"title:^(?P<artist>.+?) - (?P<title>.+)$"],
-            },
             {"key": "FFmpegMetadata", "add_metadata": True, "add_chapters": False},
             {"key": "EmbedThumbnail", "already_have_thumbnail": False},
         ],
@@ -164,6 +190,7 @@ class Downloader:
         output_root: Path,
         dashboard: Dashboard,
         unavailable: UnavailableTracker,
+        cache: MatchCache,
         debug_log: Path,
         debug: bool = False,
     ):
@@ -171,6 +198,7 @@ class Downloader:
         self._output_root = output_root
         self._dashboard = dashboard
         self._unavailable = unavailable
+        self._cache = cache
         self._debug_log = debug_log
         self._debug = debug
 
@@ -184,13 +212,17 @@ class Downloader:
 
         return filt
 
+    def _archive_for(self, folder: PlannedFolder) -> Path:
+        return archive_path(self._archives_dir, folder.folder_name, folder.archive_id)
+
     def _prepare_workspace(self, folder: PlannedFolder) -> _Workspace:
-        archive = archive_path(self._archives_dir, folder.folder_name, folder.archive_id)
         temp_root = Path(tempfile.mkdtemp(prefix="ytdl-"))
         out_tmpl = str(
             temp_root / "%(artist&{} - |)s%(title).100s.%(ext)s"
         )
-        return _Workspace(archive=archive, temp_root=temp_root, out_tmpl=out_tmpl)
+        return _Workspace(
+            archive=self._archive_for(folder), temp_root=temp_root, out_tmpl=out_tmpl
+        )
 
     def _run_ydl(
         self,
@@ -201,12 +233,10 @@ class Downloader:
     ) -> OutcomeReason | None:
         logger = YDLLogger(folder.folder_name, self._debug_log, self._unavailable.record_error)
 
-        # Build the per-video Spotify metadata map for this folder.
-        spotify_meta_by_video = {
-            r.youtube_video_id: r.spotify
-            for r in folder.resolved
-            if r.spotify is not None and r.youtube_video_id
-        }
+        # Generic info_dict overrides — the planning layer already translated
+        # whatever the upstream source had (Spotify, MusicBrainz, hand pin) into
+        # yt-dlp's info_dict shape. Downloader stays provider-agnostic.
+        info_overrides = folder.info_overrides()
 
         opts = _build_ydl_opts(
             archive=workspace.archive,
@@ -221,16 +251,15 @@ class Downloader:
 
         try:
             with YoutubeDL(opts) as ydl:
-                if spotify_meta_by_video:
-                    # Run at `pre_process` (before download) so the mutated
-                    # info_dict is what FFmpegMetadata reads later at post_process.
-                    # `add_post_processor(when="post_process")` would append to the
-                    # END of the chain — after FFmpegMetadata has already written
-                    # tags, so the override would silently no-op.
-                    ydl.add_post_processor(
-                        SpotifyMetadataPP(ydl, overrides=spotify_meta_by_video),
-                        when="pre_process",
-                    )
+                # MetadataPP at pre_process — applies per-video info_dict
+                # overrides (when present) AND falls back to "Artist - Title"
+                # regex parse for videos without overrides. Attach
+                # unconditionally; an empty overrides map still gets the
+                # fallback parse for YT-only folders.
+                ydl.add_post_processor(
+                    MetadataPP(ydl, overrides=info_overrides),
+                    when="pre_process",
+                )
                 ydl.download(urls)
         except DownloadError:
             return OutcomeReason.ERROR
@@ -262,10 +291,12 @@ class Downloader:
         # Pre-filter via the archive: keep only video IDs not already on disk.
         # yt-dlp also does this internally via download_archive, but pre-filtering
         # lets us short-circuit the entire ydl invocation when nothing is new.
-        from .archive import filter_new, read_archive
-        archived = read_archive(self._prepare_workspace(folder).archive)
+        archived = read_archive(self._archive_for(folder))
         all_video_ids = [r.youtube_video_id for r in folder.resolved if r.youtube_video_id]
-        new_video_ids = filter_new(all_video_ids, archived)
+        new_video_ids = [
+            v for v in filter_new(all_video_ids, archived)
+            if not self._unavailable.is_known_dead(v)
+        ]
 
         handle = self._dashboard.add_playlist(folder.folder_name, len(new_video_ids))
 
@@ -283,6 +314,7 @@ class Downloader:
         forwarder = ProgressForwarder(handle)
         fatal = self._run_ydl(folder, workspace, forwarder, new_video_ids)
         self._finalize(workspace, folder)
+        self._evict_dead_from_cache(folder)
 
         reason = self._classify(folder, forwarder.songs_done, fatal)
         handle.playlist_completed(songs_done=forwarder.songs_done, reason=reason)
@@ -290,11 +322,42 @@ class Downloader:
             name=folder.folder_name, songs_done=forwarder.songs_done, reason=reason
         )
 
+    def _evict_dead_from_cache(self, folder: PlannedFolder) -> None:
+        """Drop any cache entry whose video died at download time.
+
+        Without this, a next run would cache-hit the dead `video_id`, fail
+        again, and never re-resolve to a working candidate. Eviction lets the
+        next run go back through the matcher for a fresh winner.
+        """
+        attempted = {r.youtube_video_id for r in folder.resolved if r.youtube_video_id}
+        if not attempted:
+            return
+        dead_urls = {
+            e.url.rsplit("v=", 1)[-1]
+            for e in self._unavailable.entries()
+            if e.playlist == folder.folder_name
+        }
+        for video_id in attempted & dead_urls:
+            self._cache.evict_by_video_id(video_id)
+
     def download_all(self, folders: list[PlannedFolder]) -> list[PlaylistOutcome]:
-        with ThreadPoolExecutor(max_workers=config.PARALLEL_JOBS) as ex:
-            futures = []
+        ex = ThreadPoolExecutor(max_workers=config.PARALLEL_JOBS)
+        futures: list = []
+        outcomes: list[PlaylistOutcome] = []
+        try:
             for i, f in enumerate(folders):
                 if i > 0:
                     time.sleep(config.DOWNLOAD_STAGGER_SECONDS)
                 futures.append(ex.submit(self._download_one, f))
-            return [fut.result() for fut in futures]
+            for fut in futures:
+                outcomes.append(fut.result())
+        except KeyboardInterrupt:
+            # Don't let ThreadPoolExecutor.__exit__ block on shutdown(wait=True).
+            # cancel_futures drops anything that hasn't started; running yt-dlp
+            # workers will see SIGINT shortly and exit on their own. Already-
+            # written MP3s and archive lines are durable, so re-running picks
+            # up exactly where we left off.
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
+        ex.shutdown(wait=True)
+        return outcomes

@@ -30,6 +30,16 @@ RESOLUTIONS_LOG = LOGS_DIR / "resolutions.log"
 UNMATCHED_LOG = LOGS_DIR / "unmatched.txt"
 DEBUG_LOG = LOGS_DIR / "debug.log"
 UNAVAILABLE_FILE = LOGS_DIR / "unavailable-videos.txt"
+# Persistent video-id ledger. Resists across runs; once a video here, the
+# downloader refuses to attempt it again. Prevents re-spinning on known-dead
+# content (account terminated, copyright, private, geo-block).
+DEAD_VIDEOS_FILE = LOGS_DIR / "dead-videos.txt"
+# {video_id: {"added_at": ISO-8601, "source_playlist": "..."}}
+# Populated during discover/resolve from Spotify's playlist_items.added_at
+# (exact) and from YT-only playlist position (proxy). Consumed by the
+# --sync-traktor-dates subcommand to overwrite Traktor's IMPORT_DATE so
+# the library sorts by user discovery order, not by Traktor scan order.
+DISCOVERY_DATES = LOGS_DIR / "discovery-dates.json"
 
 USER_CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "yt-playlists"
 SPOTIFY_TOKEN_FILE = USER_CONFIG_DIR / "spotify-token.json"
@@ -68,7 +78,6 @@ def spotify_tag_regex(tag: str) -> re.Pattern:
 # --- Matcher signals (ported from spotDL signal weights) ---
 
 # All weights apply in a 0..100-ish space; higher is better.
-MATCH_DURATION_TOLERANCE_S = 10            # legacy AND-gate fallback
 MATCH_DURATION_DECAY_PER_SEC = 0.05        # exp decay factor: score *= exp(-decay * delta_s)
 MATCH_ARTIST_MIN_SIMILARITY = 0.4          # below this -> not a match (lowered 0.5→0.4 to catch
                                             # multi-word band names where YT credits only the

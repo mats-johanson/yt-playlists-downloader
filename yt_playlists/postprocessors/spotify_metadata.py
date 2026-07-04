@@ -1,43 +1,72 @@
-"""yt-dlp postprocessor that injects Spotify-canonical metadata into info_dict.
+"""Provider-agnostic metadata writer — single yt-dlp postprocessor that
+produces correct info_dict for ANY track.
 
-Inserted BEFORE `FFmpegMetadata` so its writes carry through to ID3.
-Closes over a `{video_id: SpotifyTrackMeta}` dict supplied at construction.
+Replaces the previous SpotifyMetadataPP + MetadataFromField combo. Their
+interaction had a subtle data-corruption race: MetadataFromField runs at
+post_process and unconditionally re-parses `info["title"]` against an
+"Artist - Title" regex, overwriting fields SpotifyMetadataPP had already
+set at pre_process. Empirically observed: 76 of 980 downloaded files had
+their `artist` tag re-parsed from a multi-artist Spotify string into the
+title's first dash-segment.
 
-When the current video isn't in the map, this PP is a no-op — letting yt-dlp's
-own field inference (and our existing `MetadataFromField` "Artist - Title"
-regex) handle YouTube-only tracks.
+Single PP, run at pre_process, replaces the chain:
+
+  Pre-built overrides for this video?  Apply them (artist/title/album/date).
+  No overrides?                        Fall back to legacy `Artist - Title` regex.
+
+Provider knowledge stays in `PlannedFolder.info_overrides()` — this module
+just consumes a `{video_id: dict[str, value]}` map and copies values into
+the info_dict before yt-dlp renders the filename and before FFmpegMetadata
+writes ID3 tags. The PP doesn't import SpotifyTrackMeta.
 """
 
 from __future__ import annotations
 
+import re
+
 from yt_dlp.postprocessor.common import PostProcessor
 
-from ..tracks import SpotifyTrackMeta
+_ARTIST_TITLE_RE = re.compile(r"^(?P<artist>.+?) - (?P<title>.+)$")
 
 
-class SpotifyMetadataPP(PostProcessor):
-    """Mutates info_dict's artist/title/album/date when we have Spotify truth."""
+class MetadataPP(PostProcessor):
+    """Writes canonical artist/title/album into info_dict at pre_process."""
 
-    def __init__(self, downloader=None, overrides: dict[str, SpotifyTrackMeta] | None = None):
+    def __init__(
+        self,
+        downloader=None,
+        overrides: dict[str, dict] | None = None,
+    ):
         super().__init__(downloader)
+        # overrides: {youtube_video_id: {ydl_field: value}}
+        # Values are already in yt-dlp's info_dict shape; we just copy them in.
         self._overrides = overrides or {}
 
     def run(self, info):
         video_id = info.get("id")
-        if not video_id:
-            return [], info
-        meta = self._overrides.get(video_id)
-        if not meta:
-            return [], info
+        entry = self._overrides.get(video_id) if video_id else None
 
-        info["artist"] = meta.artist
-        info["title"] = meta.title
-        info["album"] = meta.album
-        if meta.release_date:
-            info["release_date"] = meta.release_date
-            # FFmpegMetadata reads `release_year` for the date tag too.
-            year = meta.release_date.split("-")[0]
-            if year.isdigit():
-                info["release_year"] = int(year)
-        info["track"] = meta.title  # FFmpegMetadata writes this to TRACK
+        if entry is not None:
+            info.update(entry)
+        else:
+            self._fallback_youtube(info)
+
         return [], info
+
+    @staticmethod
+    def _fallback_youtube(info: dict) -> None:
+        """Best-effort split of `Artist - Title` from yt-dlp's title field.
+
+        Only fires when no override is supplied for this video AND info_dict
+        doesn't already have an artist (i.e. yt-dlp's extractor didn't expose one).
+        """
+        if info.get("artist"):
+            return
+        title = info.get("title", "")
+        if not title:
+            return
+        match = _ARTIST_TITLE_RE.match(title)
+        if not match:
+            return
+        info["artist"] = match.group("artist")
+        info["title"] = match.group("title")

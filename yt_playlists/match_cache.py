@@ -22,6 +22,7 @@ JSON shape:
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import os
@@ -90,6 +91,21 @@ class MatchCache:
             self._entries.pop(spotify_track_id, None)
             self._write_atomic()
 
+    def evict_by_video_id(self, video_id: str) -> int:
+        """Evict any entry whose cached YouTube target is `video_id`.
+
+        Called when a video turns out to be unavailable at download time so a
+        subsequent run doesn't cache-hit the dead id forever. Returns the count
+        of evicted entries (typically 0 or 1).
+        """
+        with self._lock:
+            dead = [k for k, v in self._entries.items() if v.get("video_id") == video_id]
+            for k in dead:
+                self._entries.pop(k, None)
+            if dead:
+                self._write_atomic()
+        return len(dead)
+
     def _write_atomic(self) -> None:
         """Write to a sibling tmp file then atomically rename."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +121,3 @@ class MatchCache:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp_name)
             raise
-
-
-import contextlib  # noqa: E402  (used in _write_atomic error path)

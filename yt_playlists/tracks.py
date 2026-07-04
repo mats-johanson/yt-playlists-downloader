@@ -27,6 +27,12 @@ class SpotifyTrackMeta:
     explicit: bool
     isrc: str | None = None
     release_date: str | None = None   # "YYYY-MM-DD" or "YYYY"
+    # ISO-8601 string of when this track was added to its Spotify playlist —
+    # the user's actual discovery date, surfaced via Spotify's playlist_items
+    # response (`added_at`). Drives Traktor's IMPORT_DATE during the
+    # --sync-traktor-dates step so the user can sort their library by their
+    # own discovery order in Traktor.
+    added_at: str | None = None
 
     @property
     def duration_s(self) -> float:
@@ -40,6 +46,11 @@ class UnresolvedTrack:
     spotify: SpotifyTrackMeta | None = None    # set when source is Spotify
     youtube_video_id: str | None = None        # set when source is YouTube-direct
     youtube_title: str | None = None           # informational, from extract_flat
+    # ISO-8601 added-to-playlist timestamp. For Spotify, surfaced via
+    # SpotifyTrackMeta.added_at. For YT-direct tracks, synthesized from the
+    # video's position in the playlist (later position → later date).
+    # Drives Traktor IMPORT_DATE via --sync-traktor-dates.
+    added_at: str | None = None
 
     @property
     def is_spotify(self) -> bool:
@@ -87,3 +98,30 @@ class PlannedFolder:
     resolved: list[ResolvedTrack] = field(default_factory=list)
     unmatched: list[Unmatched] = field(default_factory=list)
     merge_note: str | None = None
+
+    def info_overrides(self) -> dict[str, dict]:
+        """Build the per-video `info_dict` override map.
+
+        Maps `{youtube_video_id: {ydl_field: value, ...}}`. Consumed by the
+        downloader's metadata postprocessor, which has no provider knowledge —
+        this method is the only place Spotify-specific fields get translated
+        into yt-dlp's `info_dict` shape.
+        """
+        out: dict[str, dict] = {}
+        for r in self.resolved:
+            if not (r.youtube_video_id and r.spotify):
+                continue
+            meta = r.spotify
+            entry: dict = {
+                "artist": meta.artist,
+                "title": meta.title,
+                "album": meta.album,
+                "track": meta.title,
+            }
+            if meta.release_date:
+                entry["release_date"] = meta.release_date
+                year = meta.release_date.split("-")[0]
+                if year.isdigit():
+                    entry["release_year"] = int(year)
+            out[r.youtube_video_id] = entry
+        return out

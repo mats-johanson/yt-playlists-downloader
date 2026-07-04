@@ -26,9 +26,11 @@ class PlaylistsConfig:
 def load(path: Path | None = None) -> PlaylistsConfig:
     path = path or config.PLAYLISTS_TOML
     if not path.exists():
-        raise FileNotFoundError(
-            f"Config not found at {path}. Copy {path.with_suffix('.toml.example')} "
-            f"to {path} and edit."
+        # No config file is a valid state: use built-in defaults (default tag,
+        # no YouTube extras). An absent file behaves identically to an empty one
+        # so fresh users can run with zero config beyond SPOTIFY_CLIENT_ID.
+        return PlaylistsConfig(
+            spotify_tag=config.DEFAULT_SPOTIFY_TAG, youtube_urls=[]
         )
     with path.open("rb") as f:
         data = tomllib.load(f)

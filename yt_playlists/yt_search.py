@@ -3,6 +3,12 @@
 Uses `extract_flat="in_playlist"` so we get flat metadata (id, title, duration,
 uploader) per candidate without a full info fetch each. Detail fetch only on
 the eventual winner during the download phase.
+
+A shared `UnavailableTracker` short-circuits the search if a global YouTube
+bot-block has already been observed. Without that hook, the download phase's
+circuit-breaker would still let 487 ytsearch calls fan out during resolve and
+each one would burn through 5 candidates worth of failing extraction, badly
+polluting the match cache with `Unmatched` rows.
 """
 
 from __future__ import annotations
@@ -10,6 +16,7 @@ from __future__ import annotations
 from yt_dlp import YoutubeDL
 
 from .matcher import YtCandidate
+from .unavailable import UnavailableTracker
 
 _SEARCH_OPTS = {
     "extract_flat": "in_playlist",
@@ -22,8 +29,19 @@ _SEARCH_OPTS = {
 }
 
 
-def youtube_search(query: str, n: int = 5) -> list[YtCandidate]:
-    """Return up to `n` candidate YouTube videos for `query`."""
+def youtube_search(
+    query: str,
+    n: int = 5,
+    *,
+    unavailable: UnavailableTracker | None = None,
+) -> list[YtCandidate]:
+    """Return up to `n` candidate YouTube videos for `query`.
+
+    If `unavailable` is provided and any prior search/download in this run
+    tripped YouTube's bot-check, returns `[]` without contacting YouTube.
+    """
+    if unavailable is not None and unavailable.any_bot_blocked():
+        return []
     url = f"ytsearch{n}:{query}"
     try:
         with YoutubeDL(_SEARCH_OPTS) as ydl:
