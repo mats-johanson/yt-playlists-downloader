@@ -112,6 +112,19 @@ uv run python diagnose_resolve.py
 7. **Override file is the correction surface**: matcher will pick wrong on some tracks (live versions, covers, regional weirdness). User pastes a line from `unmatched.txt` into `spotify_overrides.toml`; future runs use the pin.
 8. **Folder name = playlist title (sanitized)**: Spotify-derived and YouTube-derived names merge when they collide. Logged at scan time so the merge is explicit.
 
+### yt-dlp version pin
+
+`pyproject.toml` pins yt-dlp to a **nightly (.dev) floor**. YouTube's 2026-08-17
+enforcement wave broke every stable-2026.07.04 client for experiment-enrolled
+videos (android_vr: 403 on all formats; web/android: SABR-only, no URLs; ios:
+PO-token-gated; tv: DRM-flagged). The fix lives on master only (android_vr
+dropped from defaults, new `visionos` client). Symptom if this regresses: a
+single video 403s deterministically at download time, which trips the
+bot-block circuit breaker and kills every remaining playlist in the run.
+PO token providers (bgutil) do NOT fix this class of failure — tested and
+rejected 2026-08-19. Return to a stable floor once a release ships with these
+changes.
+
 ### Configuration
 
 - `OUTPUT_ROOT` env var overrides destination (default: `<repo parent>/Synced Music`).

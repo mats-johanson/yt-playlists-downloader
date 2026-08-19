@@ -4,7 +4,14 @@ version = "0.3.0"
 description = "Spotify-first music library downloader. Discover [DJ]-tagged Spotify playlists, match to YouTube, embed tags + cover art."
 requires-python = ">=3.11"
 dependencies = [
-    "yt-dlp>=2026.0.0",
+    # Nightly (.dev) floor is deliberate: YouTube's 2026-08-17 enforcement wave
+    # 403'd every client in stable 2026.07.04 (android_vr killed outright,
+    # web/android forced to SABR-only). The fix — android_vr dropped from the
+    # default set, new visionos client — exists only on master/nightly. The
+    # pre-release specifier opts uv into .dev versions for this package.
+    # Once a stable release ships with these changes, this can go back to a
+    # plain stable floor.
+    "yt-dlp>=2026.8.18.122307.dev0",
     "rich>=13.7.0",
     "spotipy>=2.24.0",
 ]
